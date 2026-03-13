@@ -71,7 +71,9 @@ end
 %% 步骤3: 频域窗函数设计（Baseline + NEW）
 f_idx = find(abs(freq)<=B);
 L = length(f_idx);
-min_width_ratio = 0.6;  % NEW: 优化窗宽下限（相对B带宽）
+min_width_B_multiple = 0.8;  % NEW: 优化窗宽下限（以B为单位）
+max_width_B_multiple = 2.0;  % NEW: 优化窗宽上限（受当前频带截断）
+f_local = freq(f_idx);
 
 % Baseline: 原有海明窗
 hamming_window = zeros(N_fft, 1);
@@ -118,13 +120,13 @@ fa_opt.gamma = 1;
 fa_opt.alpha = 0.2;
 
 best_param = optimize_generalized_cosine_fa(...
-    G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, ...
+    G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, ...
     mainlobe_width_hamming, PAPR_hamming, ...
-    lambda1, lambda2, min_width_ratio, fa_opt, fs, B);
+    lambda1, lambda2, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B);
 
 best_coeff = best_param(1:3);
-best_width_ratio = best_param(4);
-opt_gc_local = build_generalized_cosine_window(L, best_coeff, best_width_ratio);
+best_width_B_multiple = best_param(4);
+opt_gc_local = build_generalized_cosine_window(L, f_local, best_coeff, best_width_B_multiple, B);
 opt_gc_window = zeros(N_fft, 1);
 opt_gc_window(f_idx) = opt_gc_local;
 W_opt_k = fftshift(opt_gc_window);
@@ -217,6 +219,88 @@ xlabel('Frequency (MHz)'); ylabel('Magnitude (dB)');
 legend('Ideal LFM', 'Distorted output', 'Hamming window', 'Optimized generalized cosine', 'Location', 'best');
 xlim([-B/1e6*1.5, B/1e6*1.5]); ylim([-100, 5]); grid on;
 
+% 图4：论文风格四联图（与参考样式一致）
+fig4 = figure(4);
+set(fig4, 'Color', [0.94, 0.94, 0.94], 'Position', [80, 180, 1320, 380]);
+
+% 频谱归一化曲线（用于(a)/(c)）
+hamming_resp_db = 20*log10(abs(W_hamming_k)/max(abs(W_hamming_k)+eps) + 1e-12);
+opt_resp_db = 20*log10(abs(W_opt_k)/max(abs(W_opt_k)+eps) + 1e-12);
+norm_freq = (freq + fs/2) / fs;
+
+% (a) Frequency response
+ax1 = subplot(1,4,1);
+plot(norm_freq, hamming_resp_db, 'b-', 'LineWidth', 1.0); hold on;
+plot(norm_freq, opt_resp_db, 'r-', 'LineWidth', 1.0);
+xlabel('Normalized Frequency (\times\pi rad/sample)'); ylabel('Magnitude (dB)');
+legend('Kai-win', 'proposed', 'Location', 'northeast');
+ylim([-160, 5]); grid on;
+text(0.5, -0.28, '(a) Frequency response', 'Units', 'normalized', 'HorizontalAlignment', 'center', 'FontName', 'Times New Roman', 'FontSize', 13);
+
+ax1_in = axes('Position', [0.08, 0.72, 0.075, 0.2]);
+box on;
+plot(norm_freq, hamming_resp_db, 'b-', 'LineWidth', 0.8); hold on;
+plot(norm_freq, opt_resp_db, 'r-', 'LineWidth', 0.8);
+xlim([0.45, 0.55]); ylim([-80, 3]); grid on;
+set(ax1_in, 'FontSize', 6);
+
+% (b) Time domain shape
+ax2 = subplot(1,4,2);
+plot(1:L, hamming_win_local/max(hamming_win_local), 'b-', 'LineWidth', 1.0); hold on;
+plot(1:L, opt_gc_local/max(opt_gc_local+eps), 'r-', 'LineWidth', 1.0);
+xlabel('Samples'); ylabel('Normalized Amplitude');
+legend('Kai-win', 'proposed', 'Location', 'southeast');
+grid on;
+text(0.5, -0.28, '(b) Time domain shape', 'Units', 'normalized', 'HorizontalAlignment', 'center', 'FontName', 'Times New Roman', 'FontSize', 13);
+
+ax2_in = axes('Position', [0.37, 0.72, 0.075, 0.2]);
+box on;
+plot(1:L, hamming_win_local/max(hamming_win_local), 'b-', 'LineWidth', 0.8); hold on;
+plot(1:L, opt_gc_local/max(opt_gc_local+eps), 'r-', 'LineWidth', 0.8);
+xlim([round(0.82*L), L]); ylim([0, 0.2]); grid on;
+set(ax2_in, 'FontSize', 6);
+
+% (c) FIR filter performance (output spectrum)
+ax3 = subplot(1,4,3);
+hamming_spec_db = 20*log10(S_hamming_mag/max(S_hamming_mag) + 1e-12);
+opt_spec_db = 20*log10(S_opt_mag/max(S_opt_mag) + 1e-12);
+plot(norm_freq, hamming_spec_db, 'b-', 'LineWidth', 1.0); hold on;
+plot(norm_freq, opt_spec_db, 'r-', 'LineWidth', 1.0);
+xlabel('Normalized Frequency (\times\pi rad/sample)'); ylabel('Magnitude response(dB)');
+legend('Kai-win', 'proposed', 'Location', 'northeast');
+ylim([-150, 5]); grid on;
+text(0.5, -0.28, '(c) FIR filter performance', 'Units', 'normalized', 'HorizontalAlignment', 'center', 'FontName', 'Times New Roman', 'FontSize', 13);
+
+ax3_in = axes('Position', [0.66, 0.72, 0.075, 0.2]);
+box on;
+plot(norm_freq, hamming_spec_db, 'b-', 'LineWidth', 0.8); hold on;
+plot(norm_freq, opt_spec_db, 'r-', 'LineWidth', 0.8);
+xlim([0.49, 0.56]); ylim([-35, 5]); grid on;
+set(ax3_in, 'FontSize', 6);
+
+% (d) FIR filter performance (passband ripple + error)
+ax4 = subplot(1,4,4);
+passband_idx = find(abs(freq) <= B/2);
+passband_axis = (freq(passband_idx) + B/2) / B;
+amp_ham = S_hamming_mag(passband_idx) / max(S_hamming_mag(passband_idx)+eps);
+amp_opt = S_opt_mag(passband_idx) / max(S_opt_mag(passband_idx)+eps);
+plot(passband_axis, amp_ham, 'b-', 'LineWidth', 1.0); hold on;
+plot(passband_axis, amp_opt, 'r-', 'LineWidth', 1.0);
+xlabel('Normalized Frequency (\times\pi rad/sample)'); ylabel('Amplitude');
+legend('Kai-win', 'proposed', 'Location', 'northeast');
+grid on;
+text(0.5, -0.28, '(d) FIR filter performance', 'Units', 'normalized', 'HorizontalAlignment', 'center', 'FontName', 'Times New Roman', 'FontSize', 13);
+
+ax4_in = axes('Position', [0.88, 0.45, 0.09, 0.22]);
+box on;
+err_ham = abs(amp_ham - mean(amp_ham));
+err_opt = abs(amp_opt - mean(amp_opt));
+plot(passband_axis, err_ham, 'b-', 'LineWidth', 0.8); hold on;
+plot(passband_axis, err_opt, 'r-', 'LineWidth', 0.8);
+ylabel('Amplitude error');
+xlim([0, 1]); grid on;
+set(ax4_in, 'FontSize', 6);
+
 %% 步骤6: 命令行输出指标表
 fprintf('\n%-35s %-12s %-12s %-22s %-12s\n', 'Method', 'PSLR (dB)', 'ISLR (dB)', '3-dB Mainlobe Width (us)', 'PAPR (dB)');
 fprintf('%s\n', repmat('-', 1, 102));
@@ -224,10 +308,10 @@ fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Ideal LFM', PSLR_ideal, ISLR
 fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Distorted output', PSLR_no_comp, ISLR_no_comp, mainlobe_width_no_comp, PAPR_no_comp);
 fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Hamming window', PSLR_hamming, ISLR_hamming, mainlobe_width_hamming, PAPR_hamming);
 fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Optimized generalized cosine window', PSLR_opt, ISLR_opt, mainlobe_width_opt, PAPR_opt);
-fprintf('Optimized [a0, a1, a2] = [%.4f, %.4f, %.4f], width ratio = %.4f\n', best_coeff(1), best_coeff(2), best_coeff(3), best_width_ratio);
+fprintf('Optimized [a0, a1, a2] = [%.4f, %.4f, %.4f], window width = %.4f * B\n', best_coeff(1), best_coeff(2), best_coeff(3), best_width_B_multiple);
 
 %% ===== local functions =====
-function best_param = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2, min_width_ratio, fa_opt, fs, B)
+function best_param = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B)
 pop_size = fa_opt.pop_size;
 max_iter = fa_opt.max_iter;
 beta0 = fa_opt.beta0;
@@ -235,14 +319,14 @@ gamma = fa_opt.gamma;
 alpha = fa_opt.alpha;
 
 pop = rand(pop_size, 4);
-pop(:,4) = min_width_ratio + (1-min_width_ratio)*pop(:,4);
+pop(:,4) = min_width_B_multiple + (max_width_B_multiple-min_width_B_multiple)*pop(:,4);
 for i = 1:pop_size
-    pop(i, :) = project_coeffs(pop(i, :), min_width_ratio);
+    pop(i, :) = project_coeffs(pop(i, :), min_width_B_multiple, max_width_B_multiple);
 end
 
 J = zeros(pop_size, 1);
 for i = 1:pop_size
-    J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2, fs, B);
+    J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, fs, B);
 end
 
 for iter = 1:max_iter
@@ -252,22 +336,27 @@ for iter = 1:max_iter
                 r2 = sum((pop(i, :) - pop(j, :)).^2);
                 beta = beta0 * exp(-gamma * r2);
                 step = beta * (pop(j, :) - pop(i, :)) + alpha * ([rand(1, 3)-0.5, rand-0.5]);
-                pop(i, :) = project_coeffs(pop(i, :) + step, min_width_ratio);
-                J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2, fs, B);
+                pop(i, :) = project_coeffs(pop(i, :) + step, min_width_B_multiple, max_width_B_multiple);
+                J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, fs, B);
             end
         end
     end
+
+    [best_J, best_idx_iter] = min(J);
+    [~, metrics] = evaluate_window_objective(pop(best_idx_iter, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, fs, B);
+    fprintf('FA iter %02d/%02d | J=%.4f | PSLR=%.3f dB | ISLR=%.3f dB | Mainlobe=%.4f us | PAPR=%.3f dB | Width=%.3f*B\n', ...
+        iter, max_iter, best_J, metrics.pslr_db, metrics.islr_db, metrics.mainlobe_width, metrics.papr_db, pop(best_idx_iter, 4));
 end
 
 [~, best_idx] = min(J);
 best_param = pop(best_idx, :);
 end
 
-function J = evaluate_window_objective(param, G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2, fs, B)
+function [J, metrics] = evaluate_window_objective(param, G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, fs, B)
 L = length(f_idx);
 coeff = param(1:3);
-width_ratio = param(4);
-win_local = build_generalized_cosine_window(L, coeff, width_ratio);
+width_B_multiple = param(4);
+win_local = build_generalized_cosine_window(L, f_local, coeff, width_B_multiple, B);
 win = zeros(N_fft, 1);
 win(f_idx) = win_local;
 W_k = fftshift(win);
@@ -293,15 +382,24 @@ papr_db = compute_papr(s_out);
 J = pslr_db + islr_db ...
     + lambda1 * max(0, mainlobe_width - mlw_ham)^2 ...
     + lambda2 * max(0, papr_db - papr_ham)^2;
+
+metrics = struct('pslr_db', pslr_db, 'islr_db', islr_db, ...
+                 'mainlobe_width', mainlobe_width, 'papr_db', papr_db);
 end
 
-function w = build_generalized_cosine_window(L, coeff, width_ratio)
+function w = build_generalized_cosine_window(L, f_local, coeff, width_B_multiple, B)
 a0 = coeff(1); a1 = coeff(2); a2 = coeff(3);
-Lw = max(3, min(L, round(width_ratio * L)));
-
 w = zeros(L, 1);
-idx0 = floor((L - Lw)/2) + 1;
-idx1 = idx0 + Lw - 1;
+target_bw = min(2*B, max(0.1*B, width_B_multiple * B));  % 窗宽 = k*B，并限制在当前可用频带
+active_idx = find(abs(f_local) <= target_bw/2);
+if numel(active_idx) < 3
+    [~, sorted_idx] = sort(abs(f_local), 'ascend');
+    active_idx = sort(sorted_idx(1:min(3, L)));
+end
+
+idx0 = min(active_idx);
+idx1 = max(active_idx);
+Lw = idx1 - idx0 + 1;
 n = (0:Lw-1)';
 if Lw == 1
     w_local = 1;
@@ -315,9 +413,9 @@ end
 w(idx0:idx1) = w_local;
 end
 
-function param = project_coeffs(param, min_width_ratio)
+function param = project_coeffs(param, min_width_B_multiple, max_width_B_multiple)
 coeff = param(1:3);
-width_ratio = param(4);
+width_B_multiple = param(4);
 
 coeff = max(0, min(1, coeff));
 s = sum(coeff);
@@ -327,8 +425,8 @@ else
     coeff = coeff / s;
 end
 
-width_ratio = max(min_width_ratio, min(1.0, width_ratio));
-param = [coeff, width_ratio];
+width_B_multiple = max(min_width_B_multiple, min(max_width_B_multiple, width_B_multiple));
+param = [coeff, width_B_multiple];
 end
 
 %% 修正后的辅助函数
