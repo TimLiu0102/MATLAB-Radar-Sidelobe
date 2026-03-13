@@ -326,49 +326,51 @@ param = [coeff, width_ratio];
 end
 
 function pslr_linear = compute_pslr(auto_corr_norm)
+% draw_figure.m口径：基于归一化自相关，取中心主峰与其余点最大旁瓣比
+% auto_corr_norm 已在主流程按 max(abs(.)) 归一化
+
 a = abs(auto_corr_norm(:));
-[peak_val, peak_idx] = max(a);
+center_idx = ceil(length(a)/2);
+peak_val = a(center_idx);
 
-% 以3-dB主瓣范围作为主峰区域，避免把主瓣肩部误判为旁瓣
-th = peak_val / sqrt(2);
-left = peak_idx;
-while left > 1 && a(left-1) >= th
-    left = left - 1;
-end
-right = peak_idx;
-while right < length(a) && a(right+1) >= th
-    right = right + 1;
-end
+a_no_peak = a;
+a_no_peak(center_idx) = 0;
+max_sidelobe = max(a_no_peak);
 
-a(left:right) = 0;
-max_sidelobe = max(a);
 pslr_linear = max_sidelobe / max(peak_val, eps);
 end
 
 function width = compute_mainlobe_width(auto_corr_norm)
+% draw_figure.m口径：以中心主峰为参考，统计3-dB主瓣连续宽度
+
 a = abs(auto_corr_norm(:));
-[peak_val, peak_idx] = max(a);
+center_idx = ceil(length(a)/2);
+peak_val = a(center_idx);
 th = peak_val / sqrt(2);
-left = peak_idx;
+
+left = center_idx;
 while left > 1 && a(left-1) >= th
     left = left - 1;
 end
-right = peak_idx;
+right = center_idx;
 while right < length(a) && a(right+1) >= th
     right = right + 1;
 end
+
 width = right - left + 1;
 end
 
 function islr_linear = compute_islr(auto_corr_norm)
 a = abs(auto_corr_norm(:));
-[peak_val, peak_idx] = max(a);
+center_idx = ceil(length(a)/2);
+peak_val = a(center_idx);
 th = peak_val / sqrt(2);
-left = peak_idx;
+
+left = center_idx;
 while left > 1 && a(left-1) >= th
     left = left - 1;
 end
-right = peak_idx;
+right = center_idx;
 while right < length(a) && a(right+1) >= th
     right = right + 1;
 end
@@ -376,6 +378,7 @@ end
 main_energy = sum(a(left:right).^2);
 a(left:right) = 0;
 side_energy = sum(a.^2);
+
 islr_linear = side_energy / max(main_energy, eps);
 end
 
