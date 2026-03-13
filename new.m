@@ -323,8 +323,9 @@ function H_k = build_system_response(freq, B, N_fft)
 end
 
 function G_tx_k = compute_precomp_filter(S_LFM_k, H_k, alpha_reg, A_max)
-    epsilon = alpha_reg / mean(abs(H_k .* S_LFM_k));
-    G_tx_k = S_LFM_k ./ (H_k .* S_LFM_k + epsilon);
+    %#ok<INUSD> % S_LFM_k 保留为参数，便于后续扩展
+    % 正则化逆滤波（Wiener/Tikhonov 形式）
+    G_tx_k = conj(H_k) ./ (abs(H_k).^2 + alpha_reg);
 
     G_tx_mag = abs(G_tx_k);
     max_G = max(G_tx_mag);
@@ -335,7 +336,7 @@ end
 
 function W_k = generate_generalized_cosine_window(freq, B, N_fft, a1, a2)
     a0 = 1 - a1 - a2;
-    f_idx = find(abs(freq)<=B);
+    f_idx = find(abs(freq)<=B/2);
 
     gc_window = zeros(N_fft,1);
     Nw = length(f_idx);
@@ -357,7 +358,7 @@ function out = simulate_transmit_signal(params, S_LFM_k, H_k, cfg, mode)
     end
 
     if strcmpi(mode, 'hamming')
-        f_idx = find(abs(cfg.freq)<=cfg.B);
+        f_idx = find(abs(cfg.freq)<=cfg.B/2);
         hamming_window = zeros(cfg.N_fft, 1);
         hamming_win_local = hamming(length(f_idx));
         hamming_window(f_idx) = hamming_win_local;
@@ -429,10 +430,17 @@ end
 
 function E_spec = compute_spectrum_error(S_out_k, S_ideal_k, freq, band_limit)
     % 方案A：幅度谱归一化均方误差（有效带宽内）
+    % 注意：freq 采用中心化频率轴，因此需要先 fftshift 到中心化顺序再按 freq 索引。
     idx = find(abs(freq)<=band_limit);
-    S_out_band = S_out_k(idx);
-    S_ideal_band = S_ideal_k(idx);
-    E_spec = norm(abs(S_out_band) - abs(S_ideal_band), 2)^2 / (norm(abs(S_ideal_band), 2)^2 + eps);
+
+    S_out_shift = fftshift(S_out_k);
+    S_ideal_shift = fftshift(S_ideal_k);
+
+    S_out_band = S_out_shift(idx);
+    S_ideal_band = S_ideal_shift(idx);
+
+    E_spec = norm(abs(S_out_band) - abs(S_ideal_band), 2)^2 / ...
+             (norm(abs(S_ideal_band), 2)^2 + eps);
 end
 
 function J = objective_function(params, S_LFM_k, H_k, cfg)
@@ -466,7 +474,7 @@ function J = objective_function(params, S_LFM_k, H_k, cfg)
     islr_penalty = max(0, M.with_comp.islr - cfg.targets.islr)^2;
     bw_penalty = max(0, (M.with_comp.bw3db - M.ideal.bw3db) / M.ideal.bw3db)^2;
     papr_penalty = max(0, M.with_comp.papr - cfg.targets.papr)^2;
-    spec_penalty = max(0, M.with_comp.papr - cfg.targets.papr)^2;
+    spec_penalty = max(0, spec_error - cfg.targets.spec)^2;
 
     J = cfg.weights.pslr * pslr_penalty + ...
         cfg.weights.islr * islr_penalty + ...
