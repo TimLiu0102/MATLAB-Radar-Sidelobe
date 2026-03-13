@@ -430,10 +430,17 @@ end
 
 function E_spec = compute_spectrum_error(S_out_k, S_ideal_k, freq, band_limit)
     % 方案A：幅度谱归一化均方误差（有效带宽内）
+    % 注意：freq 采用中心化频率轴，因此需要先 fftshift 到中心化顺序再按 freq 索引。
     idx = find(abs(freq)<=band_limit);
-    S_out_band = S_out_k(idx);
-    S_ideal_band = S_ideal_k(idx);
-    E_spec = norm(abs(S_out_band) - abs(S_ideal_band), 2)^2 / (norm(abs(S_ideal_band), 2)^2 + eps);
+
+    S_out_shift = fftshift(S_out_k);
+    S_ideal_shift = fftshift(S_ideal_k);
+
+    S_out_band = S_out_shift(idx);
+    S_ideal_band = S_ideal_shift(idx);
+
+    E_spec = norm(abs(S_out_band) - abs(S_ideal_band), 2)^2 / ...
+             (norm(abs(S_ideal_band), 2)^2 + eps);
 end
 
 function J = objective_function(params, S_LFM_k, H_k, cfg)
