@@ -2,7 +2,7 @@
 % 在 test.m 物理建模与评价逻辑基础上，改写为：
 % “正则化因子 alpha_reg + 广义余弦窗(a1,a2) 联合优化”
 
-clear; close all; clc;
+clear; close all; clc; clear functions;
 
 %% 步骤0: 仿真参数设置
 cfg = struct();
