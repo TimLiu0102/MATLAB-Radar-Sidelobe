@@ -219,82 +219,92 @@ xlabel('Frequency (MHz)'); ylabel('Magnitude (dB)');
 legend('Ideal LFM', 'Distorted output', 'Hamming window', 'Optimized generalized cosine', 'Location', 'best');
 xlim([-B/1e6*1.5, B/1e6*1.5]); ylim([-100, 5]); grid on;
 
-% 图4：论文风格四联图（按参考样式：无小图）
-fig4 = figure(4);
-set(fig4, 'Color', [0.94, 0.94, 0.94], 'Position', [80, 180, 1320, 380]);
+% 图4：论文风格四联图（适配当前脚本变量）
+figure(4);
+set(gcf, 'Position', [120, 120, 2200, 360]);
+tiledlayout(1,4,'Padding','compact','TileSpacing','compact');
 
-% 归一化频率轴（0~1 对应 0~pi）
-norm_freq = (freq + fs/2) / fs;
+Nfft_plot = 8192;
+Nw = L;
 
-% (a) Frequency response（窗函数频率响应）
-subplot(1,4,1);
-hamming_resp_db = 20*log10(abs(W_hamming_k)/max(abs(W_hamming_k)+eps) + 1e-12);
-opt_resp_db = 20*log10(abs(W_opt_k)/max(abs(W_opt_k)+eps) + 1e-12);
-plot(norm_freq, hamming_resp_db, 'b-', 'LineWidth', 1.0); hold on;
-plot(norm_freq, opt_resp_db, 'r-', 'LineWidth', 1.0);
-xlabel('Normalized Frequency (\times\pi rad/sample)'); ylabel('Magnitude (dB)');
-legend('Kai-win', 'proposed', 'Location', 'northeast');
-ylim([-160, 5]); grid on;
-text(0.5, -0.28, '(a) Frequency response', 'Units', 'normalized', 'HorizontalAlignment', 'center', 'FontName', 'Times New Roman', 'FontSize', 13);
-
-% (b) Time domain shape（窗函数时域形状）
-subplot(1,4,2);
-plot(1:L, hamming_win_local/max(hamming_win_local), 'b-', 'LineWidth', 1.0); hold on;
-plot(1:L, opt_gc_local/max(opt_gc_local+eps), 'r-', 'LineWidth', 1.0);
-xlabel('Samples'); ylabel('Normalized Amplitude');
-legend('Kai-win', 'proposed', 'Location', 'southeast');
-grid on;
-text(0.5, -0.28, '(b) Time domain shape', 'Units', 'normalized', 'HorizontalAlignment', 'center', 'FontName', 'Times New Roman', 'FontSize', 13);
-
-% 构造用于(c)/(d)的FIR低通滤波器（同阶、不同窗）
-fir_order = max(16, L-1);
-fir_cutoff = 0.25; % 归一化到Nyquist
-b_ham = fir1(fir_order, fir_cutoff, hamming(fir_order+1));
-opt_win_fir = interp1(1:L, opt_gc_local, linspace(1, L, fir_order+1), 'linear', 'extrap');
-opt_win_fir(opt_win_fir < 0) = 0;
-if max(opt_win_fir) > 0
-    opt_win_fir = opt_win_fir / max(opt_win_fir);
+% 构造对比窗（与opt窗同长度）
+W_hamming = hamming_win_local(:);
+W_kaiser = kaiser(Nw, 6).';
+if exist('taylorwin', 'file')
+    W_taylor = taylorwin(Nw, 4, -35).';
+else
+    % 兼容环境：若无taylorwin，退化为Kaiser近似
+    W_taylor = kaiser(Nw, 5).';
 end
-b_opt = fir1(fir_order, fir_cutoff, opt_win_fir(:));
+W_cheb = chebwin(Nw, 80).';
+W_opt = opt_gc_local(:).';
 
-n_fir = 4096;
-[H_ham, w] = freqz(b_ham, 1, n_fir);
-[H_opt, ~] = freqz(b_opt, 1, n_fir);
-f_norm = w/pi;
+win_list = {W_hamming, W_kaiser, W_taylor, W_cheb, W_opt};
+labels = {'Hamming','Kaiser','Taylor','Chebyshev','Proposed'};
+styles = {'r--','b-.','m:','c--','g-'};
+widths = [1.0, 1.0, 1.2, 1.0, 1.5];
 
-% (c) FIR filter performance（幅频响应）
-subplot(1,4,3);
-mag_ham_db = 20*log10(abs(H_ham)/max(abs(H_ham)+eps) + 1e-12);
-mag_opt_db = 20*log10(abs(H_opt)/max(abs(H_opt)+eps) + 1e-12);
-plot(f_norm, mag_ham_db, 'b-', 'LineWidth', 1.0); hold on;
-plot(f_norm, mag_opt_db, 'r-', 'LineWidth', 1.0);
-xlabel('Normalized Frequency (\times\pi rad/sample)'); ylabel('Magnitude response (dB)');
-legend('Kai-win', 'proposed', 'Location', 'northeast');
-ylim([-150, 5]); grid on;
-text(0.5, -0.28, '(c) FIR filter performance', 'Units', 'normalized', 'HorizontalAlignment', 'center', 'FontName', 'Times New Roman', 'FontSize', 13);
+% (a) 窗函数频率响应
+nexttile;
+f_norm = (0:Nfft_plot-1)'/Nfft_plot;
+for ii = 1:numel(win_list)
+    Hi = abs(fft(win_list{ii}, Nfft_plot));
+    plot(f_norm, 20*log10(Hi/(max(Hi)+eps)+eps), styles{ii}, 'LineWidth', widths(ii)); hold on;
+end
+xlabel('Normalized Frequency (\times\pi rad/sample)');
+ylabel('Magnitude (dB)');
+legend(labels, 'Location','best');
+grid on; xlim([0 0.2]); ylim([-160 5]);
+text(0.5, -0.26, '(a)', 'Units', 'normalized', 'FontWeight', 'bold', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
 
-% (d) FIR filter performance（通带幅度与误差）
-subplot(1,4,4);
-pass_idx = f_norm <= fir_cutoff;
-amp_ham = abs(H_ham(pass_idx));
-amp_opt = abs(H_opt(pass_idx));
-amp_ham = amp_ham / max(amp_ham + eps);
-amp_opt = amp_opt / max(amp_opt + eps);
-plot(f_norm(pass_idx), amp_ham, 'b-', 'LineWidth', 1.0); hold on;
-plot(f_norm(pass_idx), amp_opt, 'r-', 'LineWidth', 1.0);
+% (b) 时域窗形
+nexttile;
+n = (0:Nw-1)';
+for ii = 1:numel(win_list)
+    wi = abs(win_list{ii}(:));
+    plot(n, wi/(max(wi)+eps), styles{ii}, 'LineWidth', widths(ii)); hold on;
+end
+xlabel('Samples'); ylabel('Normalized Amplitude');
+legend(labels, 'Location','best');
+grid on; xlim([0 Nw-1]);
+text(0.5, -0.26, '(b)', 'Units', 'normalized', 'FontWeight', 'bold', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
 
-yyaxis right;
-err_ham = abs(amp_ham - 1);
-err_opt = abs(amp_opt - 1);
-plot(f_norm(pass_idx), err_ham, 'b--', 'LineWidth', 0.9); hold on;
-plot(f_norm(pass_idx), err_opt, 'r--', 'LineWidth', 0.9);
+% (c) 低通 FIR 响应（窗法）
+nexttile;
+M_fir = max(32, 2*floor(Nw/4));
+wc = 0.25;  % 归一化截止频率（相对Nyquist）
+if mod(M_fir,2) ~= 0
+    M_fir = M_fir + 1;
+end
+h_ideal = fir1(M_fir, wc, 'low', rectwin(M_fir+1));
+H_fir = cell(numel(win_list),1);
+w_fir = cell(numel(win_list),1);
+for ii = 1:numel(win_list)
+    wi_src = abs(win_list{ii}(:));
+    wi = interp1(1:numel(wi_src), wi_src, linspace(1, numel(wi_src), M_fir+1), 'linear', 'extrap');
+    wi = wi(:)/(max(wi)+eps);
+    bi = h_ideal(:) .* wi(:);
+    [H_fir{ii}, w_fir{ii}] = freqz(bi, 1, Nfft_plot);
+    plot(w_fir{ii}/pi, 20*log10(abs(H_fir{ii})+eps), styles{ii}, 'LineWidth', widths(ii)); hold on;
+end
+xlabel('Normalized Frequency (\times\pi rad/sample)');
+ylabel('Magnitude response (dB)');
+legend(labels, 'Location','best');
+grid on; xlim([0 1]); ylim([-150 5]);
+text(0.5, -0.26, '(c)', 'Units', 'normalized', 'FontWeight', 'bold', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
+
+% (d) FIR 幅度误差（相对理想低通）
+nexttile;
+Hd = double(w_fir{1} <= wc*pi);
+for ii = 1:numel(win_list)
+    err_i = abs(abs(H_fir{ii}) - Hd);
+    semilogy(w_fir{ii}/pi, err_i + eps, styles{ii}, 'LineWidth', widths(ii)); hold on;
+end
+xlabel('Normalized Frequency (\times\pi rad/sample)');
 ylabel('Amplitude error');
-
-yyaxis left;
-xlabel('Normalized Frequency (\times\pi rad/sample)'); ylabel('Amplitude');
-legend('Kai-win amp', 'proposed amp', 'Kai-win error', 'proposed error', 'Location', 'best');
-grid on;
-text(0.5, -0.28, '(d) FIR filter performance', 'Units', 'normalized', 'HorizontalAlignment', 'center', 'FontName', 'Times New Roman', 'FontSize', 13);
+legend(labels, 'Location','best');
+grid on; xlim([0 1]);
+text(0.5, -0.26, '(d)', 'Units', 'normalized', 'FontWeight', 'bold', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
 
 %% 步骤6: 命令行输出指标表
 fprintf('\n%-35s %-12s %-12s %-22s %-12s\n', 'Method', 'PSLR (dB)', 'ISLR (dB)', '3-dB Mainlobe Width (us)', 'PAPR (dB)');
