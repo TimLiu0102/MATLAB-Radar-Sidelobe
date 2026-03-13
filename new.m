@@ -2,7 +2,7 @@
 % 在 test.m 物理建模与评价逻辑基础上，改写为：
 % “正则化因子 alpha_reg + 广义余弦窗(a1,a2) 联合优化”
 
-clear; close all; clc;
+clear; close all; clc; clear functions;
 
 %% 步骤0: 仿真参数设置
 cfg = struct();
@@ -21,11 +21,10 @@ cfg.A_max = 4.0;
 cfg.alpha_baseline = 1e-2;
 
 % 优化约束
-cfg.bounds.alpha = [1e-7, 1e-2];
+cfg.bounds.alpha = [1e-5, 1e-2];
 cfg.bounds.a1 = [0.01, 1];
 cfg.bounds.a2 = [0.01, 1];
 cfg.enable_a0_nonnegative = true;  % a0 = 1-a1-a2 >=0
-cfg.enable_fmincon = true;
 
 % 频谱误差有效带宽（按题意使用有效带宽）
 cfg.band_limit = cfg.B/2;
@@ -79,9 +78,8 @@ grid on;
 base_params = struct('alpha_reg', cfg.alpha_baseline, 'a1', 0.46, 'a2', 0, 'a0', 0.54);
 base_out = simulate_transmit_signal(base_params, S_LFM_k, H_k, cfg, 'hamming');
 base_metrics = evaluate_metrics(base_out.s_ideal, base_out.s_no_comp, base_out.s_with_comp, cfg);
-base_spec_error = compute_spectrum_error(base_out.S_out_k, S_LFM_k, cfg.freq, cfg.band_limit);
 
-%% 步骤3: 联合优化（网格搜索 + 可选 fmincon）
+%% 步骤3: 联合优化（差分进化 DE，全局无导数优化）
 [best_params, best_obj, best_out] = optimize_joint_parameters(S_LFM_k, H_k, cfg);
 
 fprintf('\n========== 联合优化结果 ==========' );
@@ -212,9 +210,8 @@ PAPR_ideal = 10*log10(max(abs(s_ideal).^2) / mean(abs(s_ideal).^2));
 PAPR_no_comp = 10*log10(max(abs(s_with_H).^2) / mean(abs(s_with_H).^2));
 PAPR_with_comp = 10*log10(max(abs(s_tx_with_H).^2) / mean(abs(s_tx_with_H).^2));
 
-% 频谱恢复误差（显式纳入输出）
-spec_no_comp = compute_spectrum_error(best_out.S_no_comp_out_k, S_LFM_k, cfg.freq, cfg.band_limit);
-spec_with_comp = compute_spectrum_error(best_out.S_out_k, S_LFM_k, cfg.freq, cfg.band_limit);
+% 频谱恢复误差（定义：预补偿发射频谱 vs 原始LFM频谱）
+spec_with_comp = compute_spectrum_error(best_out.S_tx_k, S_LFM_k, cfg.freq, cfg.band_limit);
 
 % 右侧文字汇总区（test.m 样式）
 subplot(3,3,[3,6,9]);
@@ -239,8 +236,7 @@ text_str = [text_str sprintf('联合优化有预补偿: %.2f dB\n', PAPR_with_co
 text_str = [text_str sprintf('PAPR增加: %.2f dB\n', PAPR_with_comp - PAPR_ideal)];
 
 text_str = [text_str sprintf('\n=== 频谱恢复误差(NMSE, 方案A) ===\n')];
-text_str = [text_str sprintf('无预补偿: %.4e\n', spec_no_comp)];
-text_str = [text_str sprintf('联合优化有预补偿: %.4e\n', spec_with_comp)];
+text_str = [text_str sprintf('预补偿发射频谱 vs 原始LFM: %.4e\n', spec_with_comp)];
 
 text(0.05, 0.5, text_str, 'FontName', 'FixedWidth', 'FontSize', 10, 'VerticalAlignment', 'middle');
 title('性能指标汇总（修正后）');
@@ -264,7 +260,7 @@ improvement_data = [pslr_ideal, pslr_no_comp, pslr_with_comp; ...
                     islr_ideal, islr_no_comp, islr_with_comp; ...
                     bw3db_ideal, bw3db_no_comp, bw3db_with_comp; ...
                     PAPR_ideal, PAPR_no_comp, PAPR_with_comp; ...
-                    0, spec_no_comp, spec_with_comp];
+                    0, 0, spec_with_comp];
 bar_labels = {'理想LFM', '无预补偿', '有预补偿'};
 bar(improvement_data');
 set(gca, 'XTickLabel', bar_labels);
@@ -286,12 +282,11 @@ fprintf('实测主瓣宽度 - 有预补偿: %.3f μs\n', bw3db_with_comp);
 fprintf('\nPAPR - 理想LFM: %.2f dB\n', PAPR_ideal);
 fprintf('PAPR - 无预补偿: %.2f dB\n', PAPR_no_comp);
 fprintf('PAPR - 有预补偿: %.2f dB（增加 %.2f dB）\n', PAPR_with_comp, PAPR_with_comp - PAPR_ideal);
-fprintf('\n频谱恢复误差 - 无预补偿: %.4e\n', spec_no_comp);
-fprintf('频谱恢复误差 - 有预补偿: %.4e\n', spec_with_comp);
+fprintf('\n频谱恢复误差(预补偿发射频谱 vs 原始LFM): %.4e\n', spec_with_comp);
 
 fprintf('\n=== 与固定Hamming基线对比（优化前后） ===\n');
 fprintf('基线PSLR/ISLR/BW/PAPR/SPEC: %.2f / %.2f / %.3f / %.2f / %.4e\n', ...
-    base_metrics.with_comp.pslr, base_metrics.with_comp.islr, base_metrics.with_comp.bw3db, base_metrics.with_comp.papr, base_spec_error);
+    base_metrics.with_comp.pslr, base_metrics.with_comp.islr, base_metrics.with_comp.bw3db, base_metrics.with_comp.papr, compute_spectrum_error(base_out.S_tx_k, S_LFM_k, cfg.freq, cfg.band_limit));
 fprintf('联合PSLR/ISLR/BW/PAPR/SPEC: %.2f / %.2f / %.3f / %.2f / %.4e\n', ...
     pslr_with_comp, islr_with_comp, bw3db_with_comp, PAPR_with_comp, spec_with_comp);
 
@@ -323,8 +318,9 @@ function H_k = build_system_response(freq, B, N_fft)
 end
 
 function G_tx_k = compute_precomp_filter(S_LFM_k, H_k, alpha_reg, A_max)
-    epsilon = alpha_reg / mean(abs(H_k .* S_LFM_k));
-    G_tx_k = S_LFM_k ./ (H_k .* S_LFM_k + epsilon);
+    %#ok<INUSD> % S_LFM_k 保留为参数，便于后续扩展
+    % 正则化逆滤波（Wiener/Tikhonov 形式）
+    G_tx_k = conj(H_k) ./ (abs(H_k).^2 + alpha_reg);
 
     G_tx_mag = abs(G_tx_k);
     max_G = max(G_tx_mag);
@@ -335,7 +331,7 @@ end
 
 function W_k = generate_generalized_cosine_window(freq, B, N_fft, a1, a2)
     a0 = 1 - a1 - a2;
-    f_idx = find(abs(freq)<=B);
+    f_idx = find(abs(freq)<=B/2);
 
     gc_window = zeros(N_fft,1);
     Nw = length(f_idx);
@@ -357,7 +353,7 @@ function out = simulate_transmit_signal(params, S_LFM_k, H_k, cfg, mode)
     end
 
     if strcmpi(mode, 'hamming')
-        f_idx = find(abs(cfg.freq)<=cfg.B);
+        f_idx = find(abs(cfg.freq)<=cfg.B/2);
         hamming_window = zeros(cfg.N_fft, 1);
         hamming_win_local = hamming(length(f_idx));
         hamming_window(f_idx) = hamming_win_local;
@@ -429,10 +425,17 @@ end
 
 function E_spec = compute_spectrum_error(S_out_k, S_ideal_k, freq, band_limit)
     % 方案A：幅度谱归一化均方误差（有效带宽内）
+    % 注意：freq 采用中心化频率轴，因此需要先 fftshift 到中心化顺序再按 freq 索引。
     idx = find(abs(freq)<=band_limit);
-    S_out_band = S_out_k(idx);
-    S_ideal_band = S_ideal_k(idx);
-    E_spec = norm(abs(S_out_band) - abs(S_ideal_band), 2)^2 / (norm(abs(S_ideal_band), 2)^2 + eps);
+
+    S_out_shift = fftshift(S_out_k);
+    S_ideal_shift = fftshift(S_ideal_k);
+
+    S_out_band = S_out_shift(idx);
+    S_ideal_band = S_ideal_shift(idx);
+
+    E_spec = norm(abs(S_out_band) - abs(S_ideal_band), 2)^2 / ...
+             (norm(abs(S_ideal_band), 2)^2 + eps);
 end
 
 function J = objective_function(params, S_LFM_k, H_k, cfg)
@@ -456,7 +459,7 @@ function J = objective_function(params, S_LFM_k, H_k, cfg)
     end
 
     M = evaluate_metrics(sim.s_ideal, sim.s_no_comp, sim.s_with_comp, cfg);
-    spec_error = compute_spectrum_error(sim.S_out_k, S_LFM_k, cfg.freq, cfg.band_limit);
+    spec_error = compute_spectrum_error(sim.S_tx_k, S_LFM_k, cfg.freq, cfg.band_limit);
 
     if any(~isfinite([M.with_comp.pslr, M.with_comp.islr, M.with_comp.bw3db, M.with_comp.papr, spec_error]))
         J = big_penalty; return;
@@ -466,8 +469,7 @@ function J = objective_function(params, S_LFM_k, H_k, cfg)
     islr_penalty = max(0, M.with_comp.islr - cfg.targets.islr)^2;
     bw_penalty = max(0, (M.with_comp.bw3db - M.ideal.bw3db) / M.ideal.bw3db)^2;
     papr_penalty = max(0, M.with_comp.papr - cfg.targets.papr)^2;
-    spec_penalty = max(0, M.with_comp.papr - cfg.targets.papr)^2;
-
+    spec_penalty = max(0, spec_error - cfg.targets.spec)^2;
     J = cfg.weights.pslr * pslr_penalty + ...
         cfg.weights.islr * islr_penalty + ...
         cfg.weights.bw   * bw_penalty + ...
@@ -480,71 +482,93 @@ function J = objective_function(params, S_LFM_k, H_k, cfg)
 end
 
 function [best_params, best_obj, best_out] = optimize_joint_parameters(S_LFM_k, H_k, cfg)
-    fprintf('\n=== 开始两阶段网格搜索 ===\n');
+    fprintf('\n=== 使用差分进化(DE)进行联合优化 ===\n');
 
-    alpha_grid_1 = logspace(log10(cfg.bounds.alpha(1)), log10(cfg.bounds.alpha(2)), 8);
-    a1_grid_1 = linspace(cfg.bounds.a1(1), cfg.bounds.a1(2), 8);
-    a2_grid_1 = linspace(cfg.bounds.a2(1), cfg.bounds.a2(2), 8);
+    % 参数向量: x = [alpha_reg, a1, a2]
+    lb = [cfg.bounds.alpha(1), cfg.bounds.a1(1), cfg.bounds.a2(1)];
+    ub = [cfg.bounds.alpha(2), cfg.bounds.a1(2), cfg.bounds.a2(2)];
 
-    [best_obj, best_vec] = grid_search(alpha_grid_1, a1_grid_1, a2_grid_1, S_LFM_k, H_k, cfg);
+    pop_size = 36;
+    max_gen = 70;
+    F = 0.75;      % mutation factor
+    CR = 0.90;     % crossover rate
 
-    alpha_c = best_vec(1); a1_c = best_vec(2); a2_c = best_vec(3);
-    alpha_grid_2 = logspace(log10(max(cfg.bounds.alpha(1), alpha_c/3)), log10(min(cfg.bounds.alpha(2), alpha_c*3)), 8);
-    a1_grid_2 = linspace(max(cfg.bounds.a1(1), a1_c-0.15), min(cfg.bounds.a1(2), a1_c+0.15), 8);
-    a2_grid_2 = linspace(max(cfg.bounds.a2(1), a2_c-0.15), min(cfg.bounds.a2(2), a2_c+0.15), 8);
+    pop = zeros(pop_size, 3);
+    obj = inf(pop_size, 1);
 
-    [best_obj2, best_vec2] = grid_search(alpha_grid_2, a1_grid_2, a2_grid_2, S_LFM_k, H_k, cfg);
-    if best_obj2 < best_obj
-        best_obj = best_obj2;
-        best_vec = best_vec2;
+    for i = 1:pop_size
+        pop(i,:) = sample_feasible_point(lb, ub, cfg.enable_a0_nonnegative);
+        obj(i) = objective_function(pop(i,:), S_LFM_k, H_k, cfg);
     end
 
-    if cfg.enable_fmincon && exist('fmincon','file') == 2
-        fprintf('=== 尝试 fmincon 精细优化 ===\n');
-        x0 = best_vec;
-        lb = [cfg.bounds.alpha(1), cfg.bounds.a1(1), cfg.bounds.a2(1)];
-        ub = [cfg.bounds.alpha(2), cfg.bounds.a1(2), cfg.bounds.a2(2)];
-        nonlcon = [];
-        if cfg.enable_a0_nonnegative
-            nonlcon = @(x) deal(x(2)+x(3)-1, []); % a1+a2<=1
-        end
-        opts = optimoptions('fmincon', 'Display', 'off', 'Algorithm', 'sqp', 'MaxFunctionEvaluations', 400);
-        try
-            [x_fm, fval_fm, exitflag] = fmincon(@(x)objective_function(x, S_LFM_k, H_k, cfg), x0, [], [], [], [], lb, ub, nonlcon, opts);
-            if exitflag > 0 && isfinite(fval_fm) && fval_fm < best_obj
-                best_obj = fval_fm;
-                best_vec = x_fm;
+    [best_obj, best_idx] = min(obj);
+    best_vec = pop(best_idx,:);
+
+    for g = 1:max_gen
+        for i = 1:pop_size
+            idx = randperm(pop_size, 3);
+            while any(idx == i)
+                idx = randperm(pop_size, 3);
             end
-        catch
-            fprintf('fmincon 执行失败，回退到网格最优结果。\n');
+
+            x1 = pop(idx(1),:); x2 = pop(idx(2),:); x3 = pop(idx(3),:);
+            v = x1 + F * (x2 - x3);
+
+            % binomial crossover
+            u = pop(i,:);
+            j_rand = randi(3);
+            for j = 1:3
+                if rand <= CR || j == j_rand
+                    u(j) = v(j);
+                end
+            end
+
+            u = project_feasible_point(u, lb, ub, cfg.enable_a0_nonnegative);
+            fu = objective_function(u, S_LFM_k, H_k, cfg);
+
+            if fu < obj(i)
+                pop(i,:) = u;
+                obj(i) = fu;
+                if fu < best_obj
+                    best_obj = fu;
+                    best_vec = u;
+                end
+            end
         end
-    else
-        fprintf('=== 未使用 fmincon（工具箱不可用或已关闭）===\n');
+        fprintf('DE进度: %d/%d, 当前最优 J=%.6f\n', g, max_gen, best_obj);
     end
 
     best_params = struct('alpha_reg', best_vec(1), 'a1', best_vec(2), 'a2', best_vec(3), 'a0', 1-best_vec(2)-best_vec(3));
     best_out = simulate_transmit_signal(best_params, S_LFM_k, H_k, cfg, 'generalized');
 end
 
-function [best_obj, best_vec] = grid_search(alpha_grid, a1_grid, a2_grid, S_LFM_k, H_k, cfg)
-    best_obj = inf;
-    best_vec = [alpha_grid(1), a1_grid(1), a2_grid(1)];
-    total = numel(alpha_grid)*numel(a1_grid)*numel(a2_grid);
-    cnt = 0;
+function x = sample_feasible_point(lb, ub, enable_a0_nonnegative)
+    x = lb + rand(1,3) .* (ub - lb);
+    x = project_feasible_point(x, lb, ub, enable_a0_nonnegative);
+end
 
-    for ia = 1:numel(alpha_grid)
-        for i1 = 1:numel(a1_grid)
-            for i2 = 1:numel(a2_grid)
-                cnt = cnt + 1;
-                x = [alpha_grid(ia), a1_grid(i1), a2_grid(i2)];
-                J = objective_function(x, S_LFM_k, H_k, cfg);
-                if J < best_obj
-                    best_obj = J;
-                    best_vec = x;
-                end
+function x = project_feasible_point(x, lb, ub, enable_a0_nonnegative)
+    x = max(lb, min(ub, x));
+
+    if enable_a0_nonnegative
+        a1 = x(2); a2 = x(3);
+        if a1 + a2 > 1
+            s = a1 + a2;
+            if s <= 0
+                a1 = lb(2); a2 = lb(3);
+            else
+                a1 = a1 / s;
+                a2 = a2 / s;
             end
+            a1 = max(lb(2), min(ub(2), a1));
+            a2 = max(lb(3), min(ub(3), a2));
+            if a1 + a2 > 1
+                scale = 1 / (a1 + a2 + eps);
+                a1 = a1 * scale;
+                a2 = a2 * scale;
+            end
+            x(2) = a1; x(3) = a2;
         end
-        fprintf('网格搜索进度: %d/%d, 当前最优 J=%.6f\n', cnt, total, best_obj);
     end
 end
 
