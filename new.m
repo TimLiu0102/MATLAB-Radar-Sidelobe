@@ -32,6 +32,7 @@ cfg.band_limit = cfg.B/2;
 % 目标函数权重与目标阈值
 cfg.weights = struct('pslr',20.0,'islr',1.0,'bw',1.5,'papr',1.5,'spec',10);
 cfg.targets = struct('pslr',-30,'islr',-20,'papr',0,'spec',0);
+cfg.spec_guard_factor = 5;   % 频谱不劣化约束权重因子
 
 % 显示参数
 f_center_idx = find(abs(cfg.freq)<=cfg.B/2);
@@ -57,6 +58,7 @@ grid on;
 
 %% 步骤1: 生成理想LFM信号及其频谱
 [s_lfm, t, S_LFM_k] = generate_lfm_signal(cfg.B, cfg.T_pulse, cfg.fs, cfg.N_pulse, cfg.N_fft);
+cfg.spec_baseline_no_comp = compute_spectrum_error(S_LFM_k, S_LFM_k, cfg.freq, cfg.band_limit);
 
 % 显示LFM信号及频谱（沿用 test.m 风格）
 figure('Position', [100, 100, 1200, 400]);
@@ -474,7 +476,8 @@ function J = objective_function(params, S_LFM_k, H_k, cfg)
         cfg.weights.islr * islr_penalty + ...
         cfg.weights.bw   * bw_penalty + ...
         cfg.weights.papr * papr_penalty + ...
-        cfg.weights.spec * spec_penalty;
+        cfg.weights.spec * spec_penalty + ...
+        cfg.weights.spec * cfg.spec_guard_factor * spec_guard_penalty;
 
     if ~isfinite(J)
         J = big_penalty;
