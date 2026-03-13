@@ -32,6 +32,7 @@ cfg.band_limit = cfg.B/2;
 % 目标函数权重与目标阈值
 cfg.weights = struct('pslr',20.0,'islr',1.0,'bw',1.5,'papr',1.5,'spec',10,'spec_sys',60);
 cfg.targets = struct('pslr',-30,'islr',-20,'papr',0,'spec',0);
+cfg.spec_guard_factor = 5;   % 频谱不劣化约束权重因子
 
 % 显示参数
 f_center_idx = find(abs(cfg.freq)<=cfg.B/2);
