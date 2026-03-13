@@ -71,6 +71,7 @@ end
 %% 步骤3: 频域窗函数设计（Baseline + NEW）
 f_idx = find(abs(freq)<=B);
 L = length(f_idx);
+min_width_ratio = 0.6;  % NEW: 优化窗宽下限（相对B带宽）
 
 % Baseline: 原有海明窗
 hamming_window = zeros(N_fft, 1);
@@ -115,12 +116,14 @@ fa_opt.beta0 = 1;
 fa_opt.gamma = 1;
 fa_opt.alpha = 0.2;
 
-best_coeff = optimize_generalized_cosine_fa(...
+best_param = optimize_generalized_cosine_fa(...
     G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, ...
     mainlobe_width_hamming, PAPR_hamming, ...
-    lambda1, lambda2, fa_opt);
+    lambda1, lambda2, min_width_ratio, fa_opt);
 
-opt_gc_local = build_generalized_cosine_window(L, best_coeff);
+best_coeff = best_param(1:3);
+best_width_ratio = best_param(4);
+opt_gc_local = build_generalized_cosine_window(L, best_coeff, best_width_ratio);
 opt_gc_window = zeros(N_fft, 1);
 opt_gc_window(f_idx) = opt_gc_local;
 W_opt_k = fftshift(opt_gc_window);
@@ -165,6 +168,11 @@ PAPR_ideal = compute_papr(s_ideal);
 PAPR_no_comp = compute_papr(s_with_H);
 PAPR_opt = compute_papr(s_tx_opt_with_H);
 
+ISLR_ideal = 10*log10(compute_islr(auto_corr_ideal) + 1e-12);
+ISLR_no_comp = 10*log10(compute_islr(auto_corr_no_comp) + 1e-12);
+ISLR_hamming = 10*log10(compute_islr(auto_corr_hamming) + 1e-12);
+ISLR_opt = 10*log10(compute_islr(auto_corr_opt) + 1e-12);
+
 %% 步骤5: 关键图输出（仅保留关键对比图）
 % 频谱准备
 s_ideal_padded = zeros(N_fft, 1); s_ideal_padded(1:N_pulse) = s_ideal;
@@ -206,25 +214,26 @@ legend('Ideal LFM', 'Distorted output', 'Hamming window', 'Optimized generalized
 xlim([-B/1e6*1.5, B/1e6*1.5]); ylim([-100, 5]); grid on;
 
 %% 步骤6: 命令行输出指标表
-fprintf('\n%-35s %-12s %-22s %-12s\n', 'Method', 'PSLR (dB)', '3-dB Mainlobe Width', 'PAPR (dB)');
-fprintf('%s\n', repmat('-', 1, 86));
-fprintf('%-35s %-12.3f %-22d %-12.3f\n', 'Ideal LFM', PSLR_ideal, mainlobe_width_ideal, PAPR_ideal);
-fprintf('%-35s %-12.3f %-22d %-12.3f\n', 'Distorted output', PSLR_no_comp, mainlobe_width_no_comp, PAPR_no_comp);
-fprintf('%-35s %-12.3f %-22d %-12.3f\n', 'Hamming window', PSLR_hamming, mainlobe_width_hamming, PAPR_hamming);
-fprintf('%-35s %-12.3f %-22d %-12.3f\n', 'Optimized generalized cosine window', PSLR_opt, mainlobe_width_opt, PAPR_opt);
-fprintf('Optimized [a0, a1, a2] = [%.4f, %.4f, %.4f]\n', best_coeff(1), best_coeff(2), best_coeff(3));
+fprintf('\n%-35s %-12s %-12s %-22s %-12s\n', 'Method', 'PSLR (dB)', 'ISLR (dB)', '3-dB Mainlobe Width', 'PAPR (dB)');
+fprintf('%s\n', repmat('-', 1, 102));
+fprintf('%-35s %-12.3f %-12.3f %-22d %-12.3f\n', 'Ideal LFM', PSLR_ideal, ISLR_ideal, mainlobe_width_ideal, PAPR_ideal);
+fprintf('%-35s %-12.3f %-12.3f %-22d %-12.3f\n', 'Distorted output', PSLR_no_comp, ISLR_no_comp, mainlobe_width_no_comp, PAPR_no_comp);
+fprintf('%-35s %-12.3f %-12.3f %-22d %-12.3f\n', 'Hamming window', PSLR_hamming, ISLR_hamming, mainlobe_width_hamming, PAPR_hamming);
+fprintf('%-35s %-12.3f %-12.3f %-22d %-12.3f\n', 'Optimized generalized cosine window', PSLR_opt, ISLR_opt, mainlobe_width_opt, PAPR_opt);
+fprintf('Optimized [a0, a1, a2] = [%.4f, %.4f, %.4f], width ratio = %.4f\n', best_coeff(1), best_coeff(2), best_coeff(3), best_width_ratio);
 
 %% ===== local functions =====
-function best_coeff = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2, fa_opt)
+function best_param = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2, min_width_ratio, fa_opt)
 pop_size = fa_opt.pop_size;
 max_iter = fa_opt.max_iter;
 beta0 = fa_opt.beta0;
 gamma = fa_opt.gamma;
 alpha = fa_opt.alpha;
 
-pop = rand(pop_size, 3);
+pop = rand(pop_size, 4);
+pop(:,4) = min_width_ratio + (1-min_width_ratio)*pop(:,4);
 for i = 1:pop_size
-    pop(i, :) = project_coeffs(pop(i, :));
+    pop(i, :) = project_coeffs(pop(i, :), min_width_ratio);
 end
 
 J = zeros(pop_size, 1);
@@ -238,8 +247,8 @@ for iter = 1:max_iter
             if J(j) < J(i)
                 r2 = sum((pop(i, :) - pop(j, :)).^2);
                 beta = beta0 * exp(-gamma * r2);
-                step = beta * (pop(j, :) - pop(i, :)) + alpha * (rand(1, 3) - 0.5);
-                pop(i, :) = project_coeffs(pop(i, :) + step);
+                step = beta * (pop(j, :) - pop(i, :)) + alpha * ([rand(1, 3)-0.5, rand-0.5]);
+                pop(i, :) = project_coeffs(pop(i, :) + step, min_width_ratio);
                 J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2);
             end
         end
@@ -247,12 +256,14 @@ for iter = 1:max_iter
 end
 
 [~, best_idx] = min(J);
-best_coeff = pop(best_idx, :);
+best_param = pop(best_idx, :);
 end
 
-function J = evaluate_window_objective(coeff, G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2)
+function J = evaluate_window_objective(param, G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2)
 L = length(f_idx);
-win_local = build_generalized_cosine_window(L, coeff);
+coeff = param(1:3);
+width_ratio = param(4);
+win_local = build_generalized_cosine_window(L, coeff, width_ratio);
 win = zeros(N_fft, 1);
 win(f_idx) = win_local;
 W_k = fftshift(win);
@@ -271,27 +282,37 @@ auto_corr = auto_corr / max(abs(auto_corr));
 pslr_linear = compute_pslr(auto_corr);
 mainlobe_width = compute_mainlobe_width(auto_corr);
 papr_db = compute_papr(s_out);
+islr_linear = compute_islr(auto_corr);
 
-J = pslr_linear ...
+J = pslr_linear + islr_linear ...
     + lambda1 * max(0, mainlobe_width - mlw_ham)^2 ...
     + lambda2 * max(0, papr_db - papr_ham)^2;
 end
 
-function w = build_generalized_cosine_window(L, coeff)
-n = (0:L-1)';
+function w = build_generalized_cosine_window(L, coeff, width_ratio)
 a0 = coeff(1); a1 = coeff(2); a2 = coeff(3);
-if L == 1
-    w = 1;
+Lw = max(3, min(L, round(width_ratio * L)));
+
+w = zeros(L, 1);
+idx0 = floor((L - Lw)/2) + 1;
+idx1 = idx0 + Lw - 1;
+n = (0:Lw-1)';
+if Lw == 1
+    w_local = 1;
 else
-    w = a0 - a1*cos(2*pi*n/(L-1)) + a2*cos(4*pi*n/(L-1));
+    w_local = a0 - a1*cos(2*pi*n/(Lw-1)) + a2*cos(4*pi*n/(Lw-1));
 end
-w(w < 0) = 0;
-if max(w) > 0
-    w = w / max(w);
+w_local(w_local < 0) = 0;
+if max(w_local) > 0
+    w_local = w_local / max(w_local);
 end
+w(idx0:idx1) = w_local;
 end
 
-function coeff = project_coeffs(coeff)
+function param = project_coeffs(param, min_width_ratio)
+coeff = param(1:3);
+width_ratio = param(4);
+
 coeff = max(0, min(1, coeff));
 s = sum(coeff);
 if s <= eps
@@ -299,6 +320,9 @@ if s <= eps
 else
     coeff = coeff / s;
 end
+
+width_ratio = max(min_width_ratio, min(1.0, width_ratio));
+param = [coeff, width_ratio];
 end
 
 function pslr_linear = compute_pslr(auto_corr_norm)
@@ -334,6 +358,25 @@ while right < length(a) && a(right+1) >= th
     right = right + 1;
 end
 width = right - left + 1;
+end
+
+function islr_linear = compute_islr(auto_corr_norm)
+a = abs(auto_corr_norm(:));
+[peak_val, peak_idx] = max(a);
+th = peak_val / sqrt(2);
+left = peak_idx;
+while left > 1 && a(left-1) >= th
+    left = left - 1;
+end
+right = peak_idx;
+while right < length(a) && a(right+1) >= th
+    right = right + 1;
+end
+
+main_energy = sum(a(left:right).^2);
+a(left:right) = 0;
+side_energy = sum(a.^2);
+islr_linear = side_energy / max(main_energy, eps);
 end
 
 function papr_db = compute_papr(x)
