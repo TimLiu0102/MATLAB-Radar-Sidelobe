@@ -219,17 +219,17 @@ xlabel('Frequency (MHz)'); ylabel('Magnitude (dB)');
 legend('Ideal LFM', 'Distorted output', 'Hamming window', 'Optimized generalized cosine', 'Location', 'best');
 xlim([-B/1e6*1.5, B/1e6*1.5]); ylim([-100, 5]); grid on;
 
-% 图4：论文风格四联图（与参考样式一致）
+% 图4：论文风格四联图（按参考样式：无小图）
 fig4 = figure(4);
 set(fig4, 'Color', [0.94, 0.94, 0.94], 'Position', [80, 180, 1320, 380]);
 
-% 频谱归一化曲线（用于(a)/(c)）
-hamming_resp_db = 20*log10(abs(W_hamming_k)/max(abs(W_hamming_k)+eps) + 1e-12);
-opt_resp_db = 20*log10(abs(W_opt_k)/max(abs(W_opt_k)+eps) + 1e-12);
+% 归一化频率轴（0~1 对应 0~pi）
 norm_freq = (freq + fs/2) / fs;
 
-% (a) Frequency response
-ax1 = subplot(1,4,1);
+% (a) Frequency response（窗函数频率响应）
+subplot(1,4,1);
+hamming_resp_db = 20*log10(abs(W_hamming_k)/max(abs(W_hamming_k)+eps) + 1e-12);
+opt_resp_db = 20*log10(abs(W_opt_k)/max(abs(W_opt_k)+eps) + 1e-12);
 plot(norm_freq, hamming_resp_db, 'b-', 'LineWidth', 1.0); hold on;
 plot(norm_freq, opt_resp_db, 'r-', 'LineWidth', 1.0);
 xlabel('Normalized Frequency (\times\pi rad/sample)'); ylabel('Magnitude (dB)');
@@ -237,15 +237,8 @@ legend('Kai-win', 'proposed', 'Location', 'northeast');
 ylim([-160, 5]); grid on;
 text(0.5, -0.28, '(a) Frequency response', 'Units', 'normalized', 'HorizontalAlignment', 'center', 'FontName', 'Times New Roman', 'FontSize', 13);
 
-ax1_in = axes('Position', [0.08, 0.72, 0.075, 0.2]);
-box on;
-plot(norm_freq, hamming_resp_db, 'b-', 'LineWidth', 0.8); hold on;
-plot(norm_freq, opt_resp_db, 'r-', 'LineWidth', 0.8);
-xlim([0.45, 0.55]); ylim([-80, 3]); grid on;
-set(ax1_in, 'FontSize', 6);
-
-% (b) Time domain shape
-ax2 = subplot(1,4,2);
+% (b) Time domain shape（窗函数时域形状）
+subplot(1,4,2);
 plot(1:L, hamming_win_local/max(hamming_win_local), 'b-', 'LineWidth', 1.0); hold on;
 plot(1:L, opt_gc_local/max(opt_gc_local+eps), 'r-', 'LineWidth', 1.0);
 xlabel('Samples'); ylabel('Normalized Amplitude');
@@ -253,53 +246,55 @@ legend('Kai-win', 'proposed', 'Location', 'southeast');
 grid on;
 text(0.5, -0.28, '(b) Time domain shape', 'Units', 'normalized', 'HorizontalAlignment', 'center', 'FontName', 'Times New Roman', 'FontSize', 13);
 
-ax2_in = axes('Position', [0.37, 0.72, 0.075, 0.2]);
-box on;
-plot(1:L, hamming_win_local/max(hamming_win_local), 'b-', 'LineWidth', 0.8); hold on;
-plot(1:L, opt_gc_local/max(opt_gc_local+eps), 'r-', 'LineWidth', 0.8);
-xlim([round(0.82*L), L]); ylim([0, 0.2]); grid on;
-set(ax2_in, 'FontSize', 6);
+% 构造用于(c)/(d)的FIR低通滤波器（同阶、不同窗）
+fir_order = max(16, L-1);
+fir_cutoff = 0.25; % 归一化到Nyquist
+b_ham = fir1(fir_order, fir_cutoff, hamming(fir_order+1));
+opt_win_fir = interp1(1:L, opt_gc_local, linspace(1, L, fir_order+1), 'linear', 'extrap');
+opt_win_fir(opt_win_fir < 0) = 0;
+if max(opt_win_fir) > 0
+    opt_win_fir = opt_win_fir / max(opt_win_fir);
+end
+b_opt = fir1(fir_order, fir_cutoff, opt_win_fir(:));
 
-% (c) FIR filter performance (output spectrum)
-ax3 = subplot(1,4,3);
-hamming_spec_db = 20*log10(S_hamming_mag/max(S_hamming_mag) + 1e-12);
-opt_spec_db = 20*log10(S_opt_mag/max(S_opt_mag) + 1e-12);
-plot(norm_freq, hamming_spec_db, 'b-', 'LineWidth', 1.0); hold on;
-plot(norm_freq, opt_spec_db, 'r-', 'LineWidth', 1.0);
-xlabel('Normalized Frequency (\times\pi rad/sample)'); ylabel('Magnitude response(dB)');
+n_fir = 4096;
+[H_ham, w] = freqz(b_ham, 1, n_fir);
+[H_opt, ~] = freqz(b_opt, 1, n_fir);
+f_norm = w/pi;
+
+% (c) FIR filter performance（幅频响应）
+subplot(1,4,3);
+mag_ham_db = 20*log10(abs(H_ham)/max(abs(H_ham)+eps) + 1e-12);
+mag_opt_db = 20*log10(abs(H_opt)/max(abs(H_opt)+eps) + 1e-12);
+plot(f_norm, mag_ham_db, 'b-', 'LineWidth', 1.0); hold on;
+plot(f_norm, mag_opt_db, 'r-', 'LineWidth', 1.0);
+xlabel('Normalized Frequency (\times\pi rad/sample)'); ylabel('Magnitude response (dB)');
 legend('Kai-win', 'proposed', 'Location', 'northeast');
 ylim([-150, 5]); grid on;
 text(0.5, -0.28, '(c) FIR filter performance', 'Units', 'normalized', 'HorizontalAlignment', 'center', 'FontName', 'Times New Roman', 'FontSize', 13);
 
-ax3_in = axes('Position', [0.66, 0.72, 0.075, 0.2]);
-box on;
-plot(norm_freq, hamming_spec_db, 'b-', 'LineWidth', 0.8); hold on;
-plot(norm_freq, opt_spec_db, 'r-', 'LineWidth', 0.8);
-xlim([0.49, 0.56]); ylim([-35, 5]); grid on;
-set(ax3_in, 'FontSize', 6);
+% (d) FIR filter performance（通带幅度与误差）
+subplot(1,4,4);
+pass_idx = f_norm <= fir_cutoff;
+amp_ham = abs(H_ham(pass_idx));
+amp_opt = abs(H_opt(pass_idx));
+amp_ham = amp_ham / max(amp_ham + eps);
+amp_opt = amp_opt / max(amp_opt + eps);
+plot(f_norm(pass_idx), amp_ham, 'b-', 'LineWidth', 1.0); hold on;
+plot(f_norm(pass_idx), amp_opt, 'r-', 'LineWidth', 1.0);
 
-% (d) FIR filter performance (passband ripple + error)
-ax4 = subplot(1,4,4);
-passband_idx = find(abs(freq) <= B/2);
-passband_axis = (freq(passband_idx) + B/2) / B;
-amp_ham = S_hamming_mag(passband_idx) / max(S_hamming_mag(passband_idx)+eps);
-amp_opt = S_opt_mag(passband_idx) / max(S_opt_mag(passband_idx)+eps);
-plot(passband_axis, amp_ham, 'b-', 'LineWidth', 1.0); hold on;
-plot(passband_axis, amp_opt, 'r-', 'LineWidth', 1.0);
+yyaxis right;
+err_ham = abs(amp_ham - 1);
+err_opt = abs(amp_opt - 1);
+plot(f_norm(pass_idx), err_ham, 'b--', 'LineWidth', 0.9); hold on;
+plot(f_norm(pass_idx), err_opt, 'r--', 'LineWidth', 0.9);
+ylabel('Amplitude error');
+
+yyaxis left;
 xlabel('Normalized Frequency (\times\pi rad/sample)'); ylabel('Amplitude');
-legend('Kai-win', 'proposed', 'Location', 'northeast');
+legend('Kai-win amp', 'proposed amp', 'Kai-win error', 'proposed error', 'Location', 'best');
 grid on;
 text(0.5, -0.28, '(d) FIR filter performance', 'Units', 'normalized', 'HorizontalAlignment', 'center', 'FontName', 'Times New Roman', 'FontSize', 13);
-
-ax4_in = axes('Position', [0.88, 0.45, 0.09, 0.22]);
-box on;
-err_ham = abs(amp_ham - mean(amp_ham));
-err_opt = abs(amp_opt - mean(amp_opt));
-plot(passband_axis, err_ham, 'b-', 'LineWidth', 0.8); hold on;
-plot(passband_axis, err_opt, 'r-', 'LineWidth', 0.8);
-ylabel('Amplitude error');
-xlim([0, 1]); grid on;
-set(ax4_in, 'FontSize', 6);
 
 %% 步骤6: 命令行输出指标表
 fprintf('\n%-35s %-12s %-12s %-22s %-12s\n', 'Method', 'PSLR (dB)', 'ISLR (dB)', '3-dB Mainlobe Width (us)', 'PAPR (dB)');
