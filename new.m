@@ -586,21 +586,30 @@ end
 
 % ===== 以下三个函数保持 test.m 版本逻辑 =====
 function pslr = compute_pslr_corrected(corr_signal, peak_idx, fs, B)
-    mainlobe_width_samples = ceil(2 * fs / B);
+    % 修正的峰值旁瓣比计算函数
+    % 基于主瓣理论宽度定义区域
+    % 主瓣宽度 ≈ 1/B，转换为采样点数
+    mainlobe_width_samples = ceil(2 * fs / B);  % 取2倍作为安全余量
+    
+    % 确保边界有效
     mainlobe_start = max(1, peak_idx - mainlobe_width_samples);
     mainlobe_end = min(length(corr_signal), peak_idx + mainlobe_width_samples);
-
+    
+    % 创建掩码排除主瓣
     mask = true(length(corr_signal), 1);
     mask(mainlobe_start:mainlobe_end) = false;
-
+    
+    % 如果没有旁瓣，返回一个较差的值
     if sum(mask) == 0
-        pslr = -5;
+        pslr = -5;  % 一个较差的值
         return;
     end
-
+    
+    % 计算旁瓣峰值和主瓣峰值
     sidelobe_peak = max(abs(corr_signal(mask)));
     mainlobe_peak = abs(corr_signal(peak_idx));
-
+    
+    % 计算PSLR（dB）
     if mainlobe_peak > 0
         pslr = 20*log10(sidelobe_peak / mainlobe_peak);
     else
@@ -609,14 +618,24 @@ function pslr = compute_pslr_corrected(corr_signal, peak_idx, fs, B)
 end
 
 function islr = compute_islr_corrected(corr_signal, peak_idx, fs, B)
-    mainlobe_width_samples = ceil(2 * fs / B);
+    % 修正的积分旁瓣比计算函数
+    % 主瓣宽度 ≈ 1/B，转换为采样点数
+    mainlobe_width_samples = ceil(2 * fs / B);  % 取2倍作为安全余量
+    
+    % 确保边界有效
     mainlobe_start = max(1, peak_idx - mainlobe_width_samples);
     mainlobe_end = min(length(corr_signal), peak_idx + mainlobe_width_samples);
-
+    
+    % 主瓣能量
     mainlobe_energy = sum(abs(corr_signal(mainlobe_start:mainlobe_end)).^2);
+    
+    % 总能量
     total_energy = sum(abs(corr_signal).^2);
+    
+    % 旁瓣能量 = 总能量 - 主瓣能量
     sidelobe_energy = total_energy - mainlobe_energy;
-
+    
+    % 计算ISLR（dB）
     if mainlobe_energy > 0 && sidelobe_energy > 0
         islr = 10*log10(sidelobe_energy / mainlobe_energy);
     else
@@ -625,32 +644,42 @@ function islr = compute_islr_corrected(corr_signal, peak_idx, fs, B)
 end
 
 function bw_3db = compute_3db_width_corrected(corr_signal, peak_idx, fs, B)
+    % 修正的3dB主瓣宽度计算函数
     corr_mag = abs(corr_signal);
     peak_value = corr_mag(peak_idx);
-
-    threshold_3db = peak_value / sqrt(2);
-
+    
+    % 找到3dB点（峰值下降3dB）
+    threshold_3db = peak_value / sqrt(2);  % -3dB点
+    
+    % 向左搜索3dB点
     left_idx = peak_idx;
     step_count = 0;
-    max_steps = 100;
+    max_steps = 100;  % 防止无限循环
+    
     while left_idx > 1 && corr_mag(left_idx) >= threshold_3db && step_count < max_steps
         left_idx = left_idx - 1;
         step_count = step_count + 1;
     end
-
+    
+    % 向右搜索3dB点
     right_idx = peak_idx;
     step_count = 0;
+    
     while right_idx < length(corr_mag) && corr_mag(right_idx) >= threshold_3db && step_count < max_steps
         right_idx = right_idx + 1;
         step_count = step_count + 1;
     end
-
+    
+    % 计算宽度（秒）
     width_samples = right_idx - left_idx;
-    bw_3db = width_samples / fs * 1e6;
-
+    bw_3db = width_samples / fs * 1e6;  % 转换为微秒
+    
+    % 如果找不到3dB点或宽度异常，返回理论值
     if bw_3db <= 0 || bw_3db > 100
-        bw_3db = 0.886 / B * 1e6;
+        bw_3db = 0.886 / B * 1e6;  % 修正后的理论公式
     end
+    
+    % 确保宽度不会太小
     if bw_3db < 0.01
         bw_3db = 0.886 / B * 1e6;
     end
