@@ -26,11 +26,21 @@ weights.papr = 0.5;
 weights.spec = 1.2;
 
 %% 2) 生成理想LFM与系统响应
-[s_lfm, S_ideal_k, t] = generate_lfm_signal(cfg.B, cfg.T_pulse, cfg.fs, cfg.N_pulse, cfg.N_fft);
+[s_lfm, S_ideal_k_raw, t] = generate_lfm_signal(cfg.B, cfg.T_pulse, cfg.fs, cfg.N_pulse, cfg.N_fft);
 H_k = build_system_response(cfg.freq, cfg.B, cfg.N_fft);
 
+% 归一化理想LFM作为统一参考（避免各方案频谱误差仅由能量尺度主导）
+s_ideal = s_lfm / sqrt(sum(abs(s_lfm).^2) + eps);
+s_ideal_pad = zeros(cfg.N_fft,1);
+s_ideal_pad(1:cfg.N_pulse) = s_ideal;
+S_ideal_k = fft(s_ideal_pad, cfg.N_fft);
+
 % 理想匹配参考（用于BW展宽惩罚）
-ideal_case = simulate_transmit_signal(S_ideal_k, H_k, ones(cfg.N_fft,1), cfg.N_pulse, cfg.N_fft);
+ideal_case = struct();
+ideal_case.s_tx = s_ideal;
+ideal_case.s_out = s_ideal;             % 理想链路：不经过系统失真
+ideal_case.S_out_k = S_ideal_k;
+ideal_case.G_eff = ones(cfg.N_fft,1);
 metrics_ideal = evaluate_metrics(ideal_case.s_out, cfg.fs, cfg.mainlobe_guard);
 
 %% 3) 基准方案：固定alpha + Hamming窗（与原流程一致）
@@ -40,14 +50,14 @@ baseline.a2 = 0.00;
 baseline.a0 = 1 - baseline.a1 - baseline.a2;
 
 W_base = generate_generalized_cosine_window(cfg.N_fft, baseline.a1, baseline.a2, cfg.B, cfg.freq);
-G_base = compute_precomp_filter(S_ideal_k, H_k, baseline.alpha_reg, cfg.A_max);
+G_base = compute_precomp_filter(S_ideal_k_raw, H_k, baseline.alpha_reg, cfg.A_max);
 base_case = simulate_transmit_signal(S_ideal_k, H_k, G_base .* W_base, cfg.N_pulse, cfg.N_fft);
 base_metrics = evaluate_metrics(base_case.s_out, cfg.fs, cfg.mainlobe_guard);
 base_metrics.papr_db = 10*log10(max(abs(base_case.s_tx).^2) / mean(abs(base_case.s_tx).^2));
 base_metrics.spec_error = compute_spectrum_error(S_ideal_k, base_case.S_out_k, cfg.freq, cfg.B);
 
 %% 4) 联合优化：网格粗细两阶段搜索
-opt = optimize_joint_parameters(S_ideal_k, H_k, cfg, weights, metrics_ideal);
+opt = optimize_joint_parameters(S_ideal_k, S_ideal_k_raw, H_k, cfg, weights, metrics_ideal);
 
 % 可选：fmincon精修
 opt_fmincon = [];
@@ -57,7 +67,7 @@ if exist('fmincon', 'file') == 2
         lb = [1e-6, 0, 0];
         ub = [1, 1, 1];
         A = [0, 1, 1]; b = 1;   % a1 + a2 <= 1 -> a0>=0
-        fobj = @(x) objective_function(x, S_ideal_k, H_k, cfg, weights, metrics_ideal);
+        fobj = @(x) objective_function(x, S_ideal_k, S_ideal_k_raw, H_k, cfg, weights, metrics_ideal);
         options = optimoptions('fmincon','Display','none','Algorithm','sqp',...
             'MaxIterations',80,'OptimalityTolerance',1e-5,'StepTolerance',1e-7);
         [xopt, fval, exitflag] = fmincon(fobj, x0, A, b, [], [], lb, ub, [], options);
@@ -68,7 +78,7 @@ if exist('fmincon', 'file') == 2
             opt_fmincon.a2 = xopt(3);
             opt_fmincon.a0 = 1 - xopt(2) - xopt(3);
             opt_fmincon.J = fval;
-            [~, sim_best, met_best] = objective_function(xopt, S_ideal_k, H_k, cfg, weights, metrics_ideal);
+            [~, sim_best, met_best] = objective_function(xopt, S_ideal_k, S_ideal_k_raw, H_k, cfg, weights, metrics_ideal);
             opt_fmincon.sim = sim_best;
             opt_fmincon.metrics = met_best;
         end
@@ -92,7 +102,7 @@ no_comp_metrics.papr_db = 10*log10(max(abs(no_comp_case.s_tx).^2) / mean(abs(no_
 no_comp_metrics.spec_error = compute_spectrum_error(S_ideal_k, no_comp_case.S_out_k, cfg.freq, cfg.B);
 
 % 理想项补全便于表格输出
-metrics_ideal.papr_db = 10*log10(max(abs(ideal_case.s_tx).^2)/mean(abs(ideal_case.s_tx).^2));
+metrics_ideal.papr_db = 10*log10(max(abs(ideal_case.s_tx).^2)/(mean(abs(ideal_case.s_tx).^2)+eps));
 metrics_ideal.spec_error = compute_spectrum_error(S_ideal_k, ideal_case.S_out_k, cfg.freq, cfg.B);
 
 %% 6) 结果打印与对比表
@@ -277,10 +287,13 @@ function E_spec = compute_spectrum_error(S_ideal_k, S_out_k, freq, B)
     band_idx = abs(freq)<=B/2; % 在有效带宽内评价
     A = abs(S_ideal_k(band_idx));
     Bv = abs(S_out_k(band_idx));
+    % 先在带内做L2归一化，抑制“仅幅度尺度不同”导致的失真误判
+    A = A / (norm(A,2) + eps);
+    Bv = Bv / (norm(Bv,2) + eps);
     E_spec = (norm(Bv - A, 2)^2) / (norm(A, 2)^2 + eps);
 end
 
-function [J, sim, metrics] = objective_function(params, S_ideal_k, H_k, cfg, weights, metrics_ideal)
+function [J, sim, metrics] = objective_function(params, S_ideal_k, S_ideal_k_raw, H_k, cfg, weights, metrics_ideal)
     huge = 1e9;
     alpha_reg = params(1); a1 = params(2); a2 = params(3);
 
@@ -288,7 +301,7 @@ function [J, sim, metrics] = objective_function(params, S_ideal_k, H_k, cfg, wei
         J = huge; sim = []; metrics = []; return;
     end
 
-    G = compute_precomp_filter(S_ideal_k, H_k, alpha_reg, cfg.A_max);
+    G = compute_precomp_filter(S_ideal_k_raw, H_k, alpha_reg, cfg.A_max);
     W = generate_generalized_cosine_window(cfg.N_fft, a1, a2, cfg.B, cfg.freq);
     if any(~isfinite(G)) || any(~isfinite(W))
         J = huge; sim = []; metrics = []; return;
@@ -317,13 +330,13 @@ function [J, sim, metrics] = objective_function(params, S_ideal_k, H_k, cfg, wei
         weights.papr*papr_pen + weights.spec*spec_pen;
 end
 
-function opt = optimize_joint_parameters(S_ideal_k, H_k, cfg, weights, metrics_ideal)
+function opt = optimize_joint_parameters(S_ideal_k, S_ideal_k_raw, H_k, cfg, weights, metrics_ideal)
     % 阶段1：粗搜索
     alpha_grid_1 = logspace(-5, -1, 9);
     a1_grid_1 = 0:0.1:1;
     a2_grid_1 = 0:0.1:1;
 
-    [bestJ, bestx] = grid_search(alpha_grid_1, a1_grid_1, a2_grid_1, S_ideal_k, H_k, cfg, weights, metrics_ideal);
+    [bestJ, bestx] = grid_search(alpha_grid_1, a1_grid_1, a2_grid_1, S_ideal_k, S_ideal_k_raw, H_k, cfg, weights, metrics_ideal);
 
     % 阶段2：细搜索（围绕粗搜索最优）
     a = bestx(1); u = bestx(2); v = bestx(3);
@@ -331,13 +344,13 @@ function opt = optimize_joint_parameters(S_ideal_k, H_k, cfg, weights, metrics_i
     a1_grid_2 = max(0,u-0.15):0.03:min(1,u+0.15);
     a2_grid_2 = max(0,v-0.15):0.03:min(1,v+0.15);
 
-    [bestJ2, bestx2, bestsim, bestmet] = grid_search(alpha_grid_2, a1_grid_2, a2_grid_2, S_ideal_k, H_k, cfg, weights, metrics_ideal);
+    [bestJ2, bestx2, bestsim, bestmet] = grid_search(alpha_grid_2, a1_grid_2, a2_grid_2, S_ideal_k, S_ideal_k_raw, H_k, cfg, weights, metrics_ideal);
 
     if bestJ2 < bestJ
         bestJ = bestJ2;
         bestx = bestx2;
     else
-        [~, bestsim, bestmet] = objective_function(bestx, S_ideal_k, H_k, cfg, weights, metrics_ideal);
+        [~, bestsim, bestmet] = objective_function(bestx, S_ideal_k, S_ideal_k_raw, H_k, cfg, weights, metrics_ideal);
     end
 
     opt.alpha_reg = bestx(1);
@@ -349,7 +362,7 @@ function opt = optimize_joint_parameters(S_ideal_k, H_k, cfg, weights, metrics_i
     opt.metrics = bestmet;
 end
 
-function [bestJ, bestx, bestsim, bestmet] = grid_search(alpha_grid, a1_grid, a2_grid, S_ideal_k, H_k, cfg, weights, metrics_ideal)
+function [bestJ, bestx, bestsim, bestmet] = grid_search(alpha_grid, a1_grid, a2_grid, S_ideal_k, S_ideal_k_raw, H_k, cfg, weights, metrics_ideal)
     bestJ = inf; bestx = [1e-2, 0.46, 0]; bestsim = []; bestmet = [];
     for ia = 1:numel(alpha_grid)
         for i1 = 1:numel(a1_grid)
@@ -358,7 +371,7 @@ function [bestJ, bestx, bestsim, bestmet] = grid_search(alpha_grid, a1_grid, a2_
                 if x(2)+x(3) > 1
                     continue;
                 end
-                [J, sim, met] = objective_function(x, S_ideal_k, H_k, cfg, weights, metrics_ideal);
+                [J, sim, met] = objective_function(x, S_ideal_k, S_ideal_k_raw, H_k, cfg, weights, metrics_ideal);
                 if J < bestJ
                     bestJ = J;
                     bestx = x;
