@@ -58,7 +58,7 @@ grid on;
 
 %% 步骤1: 生成理想LFM信号及其频谱
 [s_lfm, t, S_LFM_k] = generate_lfm_signal(cfg.B, cfg.T_pulse, cfg.fs, cfg.N_pulse, cfg.N_fft);
-cfg.spec_baseline_no_comp = compute_spectrum_error(S_LFM_k .* H_k, S_LFM_k, cfg.freq, cfg.band_limit);
+cfg.spec_baseline_no_comp = compute_spectrum_error(S_LFM_k, S_LFM_k, cfg.freq, cfg.band_limit);
 
 % 显示LFM信号及频谱（沿用 test.m 风格）
 figure('Position', [100, 100, 1200, 400]);
@@ -80,7 +80,7 @@ grid on;
 base_params = struct('alpha_reg', cfg.alpha_baseline, 'a1', 0.46, 'a2', 0, 'a0', 0.54);
 base_out = simulate_transmit_signal(base_params, S_LFM_k, H_k, cfg, 'hamming');
 base_metrics = evaluate_metrics(base_out.s_ideal, base_out.s_no_comp, base_out.s_with_comp, cfg);
-base_spec_error = compute_spectrum_error(base_out.S_out_k, S_LFM_k, cfg.freq, cfg.band_limit);
+base_spec_error = compute_spectrum_error(base_out.S_tx_k, S_LFM_k, cfg.freq, cfg.band_limit);
 
 %% 步骤3: 联合优化（差分进化 DE，全局无导数优化）
 [best_params, best_obj, best_out] = optimize_joint_parameters(S_LFM_k, H_k, cfg);
@@ -214,8 +214,8 @@ PAPR_no_comp = 10*log10(max(abs(s_with_H).^2) / mean(abs(s_with_H).^2));
 PAPR_with_comp = 10*log10(max(abs(s_tx_with_H).^2) / mean(abs(s_tx_with_H).^2));
 
 % 频谱恢复误差（显式纳入输出）
-spec_no_comp = compute_spectrum_error(best_out.S_no_comp_out_k, S_LFM_k, cfg.freq, cfg.band_limit);
-spec_with_comp = compute_spectrum_error(best_out.S_out_k, S_LFM_k, cfg.freq, cfg.band_limit);
+spec_no_comp = compute_spectrum_error(S_LFM_k, S_LFM_k, cfg.freq, cfg.band_limit);
+spec_with_comp = compute_spectrum_error(best_out.S_tx_k, S_LFM_k, cfg.freq, cfg.band_limit);
 
 % 右侧文字汇总区（test.m 样式）
 subplot(3,3,[3,6,9]);
@@ -240,7 +240,7 @@ text_str = [text_str sprintf('联合优化有预补偿: %.2f dB\n', PAPR_with_co
 text_str = [text_str sprintf('PAPR增加: %.2f dB\n', PAPR_with_comp - PAPR_ideal)];
 
 text_str = [text_str sprintf('\n=== 频谱恢复误差(NMSE, 方案A) ===\n')];
-text_str = [text_str sprintf('无预补偿: %.4e\n', spec_no_comp)];
+text_str = [text_str sprintf('无预补偿(按该定义): %.4e\n', spec_no_comp)];
 text_str = [text_str sprintf('联合优化有预补偿: %.4e\n', spec_with_comp)];
 
 text(0.05, 0.5, text_str, 'FontName', 'FixedWidth', 'FontSize', 10, 'VerticalAlignment', 'middle');
@@ -287,7 +287,7 @@ fprintf('实测主瓣宽度 - 有预补偿: %.3f μs\n', bw3db_with_comp);
 fprintf('\nPAPR - 理想LFM: %.2f dB\n', PAPR_ideal);
 fprintf('PAPR - 无预补偿: %.2f dB\n', PAPR_no_comp);
 fprintf('PAPR - 有预补偿: %.2f dB（增加 %.2f dB）\n', PAPR_with_comp, PAPR_with_comp - PAPR_ideal);
-fprintf('\n频谱恢复误差 - 无预补偿: %.4e\n', spec_no_comp);
+fprintf('\n频谱恢复误差 - 无预补偿(按该定义): %.4e\n', spec_no_comp);
 fprintf('频谱恢复误差 - 有预补偿: %.4e\n', spec_with_comp);
 
 fprintf('\n=== 与固定Hamming基线对比（优化前后） ===\n');
@@ -465,7 +465,7 @@ function J = objective_function(params, S_LFM_k, H_k, cfg)
     end
 
     M = evaluate_metrics(sim.s_ideal, sim.s_no_comp, sim.s_with_comp, cfg);
-    spec_error = compute_spectrum_error(sim.S_out_k, S_LFM_k, cfg.freq, cfg.band_limit);
+    spec_error = compute_spectrum_error(sim.S_tx_k, S_LFM_k, cfg.freq, cfg.band_limit);
 
     if any(~isfinite([M.with_comp.pslr, M.with_comp.islr, M.with_comp.bw3db, M.with_comp.papr, spec_error]))
         J = big_penalty; return;
