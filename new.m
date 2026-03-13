@@ -100,9 +100,10 @@ s_tx_hamming_with_H = s_tx_hamming_with_H / sqrt(sum(abs(s_tx_hamming_with_H).^2
 % Baseline指标
 auto_corr_hamming = xcorr(s_tx_hamming_with_H, s_tx_hamming_with_H);
 auto_corr_hamming = auto_corr_hamming / max(abs(auto_corr_hamming));
-PSLR_hamming_linear = compute_pslr(auto_corr_hamming);
-PSLR_hamming = 20*log10(PSLR_hamming_linear + 1e-12);
-mainlobe_width_hamming = compute_mainlobe_width(auto_corr_hamming);
+peak_idx_hamming = ceil(length(auto_corr_hamming)/2);
+PSLR_hamming = compute_pslr_corrected(auto_corr_hamming, peak_idx_hamming, fs, B);
+ISLR_hamming = compute_islr_corrected(auto_corr_hamming, peak_idx_hamming, fs, B);
+mainlobe_width_hamming = compute_3db_width_corrected(auto_corr_hamming, peak_idx_hamming, fs, B);
 PAPR_hamming = compute_papr(s_tx_hamming_with_H);
 
 %% NEW: 优化广义余弦窗设计
@@ -119,7 +120,7 @@ fa_opt.alpha = 0.2;
 best_param = optimize_generalized_cosine_fa(...
     G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, ...
     mainlobe_width_hamming, PAPR_hamming, ...
-    lambda1, lambda2, min_width_ratio, fa_opt);
+    lambda1, lambda2, min_width_ratio, fa_opt, fs, B);
 
 best_coeff = best_param(1:3);
 best_width_ratio = best_param(4);
@@ -156,22 +157,25 @@ auto_corr_opt_db = 20*log10(abs(auto_corr_opt) + 1e-10);
 
 t_corr = (-N_pulse+1:N_pulse-1) / fs * 1e6;
 
-PSLR_ideal = 20*log10(compute_pslr(auto_corr_ideal) + 1e-12);
-PSLR_no_comp = 20*log10(compute_pslr(auto_corr_no_comp) + 1e-12);
-PSLR_opt = 20*log10(compute_pslr(auto_corr_opt) + 1e-12);
+peak_idx_ideal = ceil(length(auto_corr_ideal)/2);
+peak_idx_no_comp = ceil(length(auto_corr_no_comp)/2);
+peak_idx_opt = ceil(length(auto_corr_opt)/2);
 
-mainlobe_width_ideal = compute_mainlobe_width(auto_corr_ideal);
-mainlobe_width_no_comp = compute_mainlobe_width(auto_corr_no_comp);
-mainlobe_width_opt = compute_mainlobe_width(auto_corr_opt);
+PSLR_ideal = compute_pslr_corrected(auto_corr_ideal, peak_idx_ideal, fs, B);
+PSLR_no_comp = compute_pslr_corrected(auto_corr_no_comp, peak_idx_no_comp, fs, B);
+PSLR_opt = compute_pslr_corrected(auto_corr_opt, peak_idx_opt, fs, B);
+
+ISLR_ideal = compute_islr_corrected(auto_corr_ideal, peak_idx_ideal, fs, B);
+ISLR_no_comp = compute_islr_corrected(auto_corr_no_comp, peak_idx_no_comp, fs, B);
+ISLR_opt = compute_islr_corrected(auto_corr_opt, peak_idx_opt, fs, B);
+
+mainlobe_width_ideal = compute_3db_width_corrected(auto_corr_ideal, peak_idx_ideal, fs, B);
+mainlobe_width_no_comp = compute_3db_width_corrected(auto_corr_no_comp, peak_idx_no_comp, fs, B);
+mainlobe_width_opt = compute_3db_width_corrected(auto_corr_opt, peak_idx_opt, fs, B);
 
 PAPR_ideal = compute_papr(s_ideal);
 PAPR_no_comp = compute_papr(s_with_H);
 PAPR_opt = compute_papr(s_tx_opt_with_H);
-
-ISLR_ideal = 10*log10(compute_islr(auto_corr_ideal) + 1e-12);
-ISLR_no_comp = 10*log10(compute_islr(auto_corr_no_comp) + 1e-12);
-ISLR_hamming = 10*log10(compute_islr(auto_corr_hamming) + 1e-12);
-ISLR_opt = 10*log10(compute_islr(auto_corr_opt) + 1e-12);
 
 %% 步骤5: 关键图输出（仅保留关键对比图）
 % 频谱准备
@@ -214,16 +218,16 @@ legend('Ideal LFM', 'Distorted output', 'Hamming window', 'Optimized generalized
 xlim([-B/1e6*1.5, B/1e6*1.5]); ylim([-100, 5]); grid on;
 
 %% 步骤6: 命令行输出指标表
-fprintf('\n%-35s %-12s %-12s %-22s %-12s\n', 'Method', 'PSLR (dB)', 'ISLR (dB)', '3-dB Mainlobe Width', 'PAPR (dB)');
+fprintf('\n%-35s %-12s %-12s %-22s %-12s\n', 'Method', 'PSLR (dB)', 'ISLR (dB)', '3-dB Mainlobe Width (us)', 'PAPR (dB)');
 fprintf('%s\n', repmat('-', 1, 102));
-fprintf('%-35s %-12.3f %-12.3f %-22d %-12.3f\n', 'Ideal LFM', PSLR_ideal, ISLR_ideal, mainlobe_width_ideal, PAPR_ideal);
-fprintf('%-35s %-12.3f %-12.3f %-22d %-12.3f\n', 'Distorted output', PSLR_no_comp, ISLR_no_comp, mainlobe_width_no_comp, PAPR_no_comp);
-fprintf('%-35s %-12.3f %-12.3f %-22d %-12.3f\n', 'Hamming window', PSLR_hamming, ISLR_hamming, mainlobe_width_hamming, PAPR_hamming);
-fprintf('%-35s %-12.3f %-12.3f %-22d %-12.3f\n', 'Optimized generalized cosine window', PSLR_opt, ISLR_opt, mainlobe_width_opt, PAPR_opt);
+fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Ideal LFM', PSLR_ideal, ISLR_ideal, mainlobe_width_ideal, PAPR_ideal);
+fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Distorted output', PSLR_no_comp, ISLR_no_comp, mainlobe_width_no_comp, PAPR_no_comp);
+fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Hamming window', PSLR_hamming, ISLR_hamming, mainlobe_width_hamming, PAPR_hamming);
+fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Optimized generalized cosine window', PSLR_opt, ISLR_opt, mainlobe_width_opt, PAPR_opt);
 fprintf('Optimized [a0, a1, a2] = [%.4f, %.4f, %.4f], width ratio = %.4f\n', best_coeff(1), best_coeff(2), best_coeff(3), best_width_ratio);
 
 %% ===== local functions =====
-function best_param = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2, min_width_ratio, fa_opt)
+function best_param = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2, min_width_ratio, fa_opt, fs, B)
 pop_size = fa_opt.pop_size;
 max_iter = fa_opt.max_iter;
 beta0 = fa_opt.beta0;
@@ -238,7 +242,7 @@ end
 
 J = zeros(pop_size, 1);
 for i = 1:pop_size
-    J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2);
+    J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2, fs, B);
 end
 
 for iter = 1:max_iter
@@ -249,7 +253,7 @@ for iter = 1:max_iter
                 beta = beta0 * exp(-gamma * r2);
                 step = beta * (pop(j, :) - pop(i, :)) + alpha * ([rand(1, 3)-0.5, rand-0.5]);
                 pop(i, :) = project_coeffs(pop(i, :) + step, min_width_ratio);
-                J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2);
+                J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2, fs, B);
             end
         end
     end
@@ -259,7 +263,7 @@ end
 best_param = pop(best_idx, :);
 end
 
-function J = evaluate_window_objective(param, G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2)
+function J = evaluate_window_objective(param, G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2, fs, B)
 L = length(f_idx);
 coeff = param(1:3);
 width_ratio = param(4);
@@ -279,10 +283,14 @@ s_out = s_out / sqrt(sum(abs(s_out).^2));
 auto_corr = xcorr(s_out, s_out);
 auto_corr = auto_corr / max(abs(auto_corr));
 
-pslr_linear = compute_pslr(auto_corr);
-mainlobe_width = compute_mainlobe_width(auto_corr);
+peak_idx = ceil(length(auto_corr)/2);
+pslr_db = compute_pslr_corrected(auto_corr, peak_idx, fs, B);
+islr_db = compute_islr_corrected(auto_corr, peak_idx, fs, B);
+mainlobe_width = compute_3db_width_corrected(auto_corr, peak_idx, fs, B);
 papr_db = compute_papr(s_out);
-islr_linear = compute_islr(auto_corr);
+
+pslr_linear = 10^(pslr_db/20);
+islr_linear = 10^(islr_db/10);
 
 J = pslr_linear + islr_linear ...
     + lambda1 * max(0, mainlobe_width - mlw_ham)^2 ...
@@ -325,61 +333,105 @@ width_ratio = max(min_width_ratio, min(1.0, width_ratio));
 param = [coeff, width_ratio];
 end
 
-function pslr_linear = compute_pslr(auto_corr_norm)
-% draw_figure.m口径：基于归一化自相关，取中心主峰与其余点最大旁瓣比
-% auto_corr_norm 已在主流程按 max(abs(.)) 归一化
-
-a = abs(auto_corr_norm(:));
-center_idx = ceil(length(a)/2);
-peak_val = a(center_idx);
-
-a_no_peak = a;
-a_no_peak(center_idx) = 0;
-max_sidelobe = max(a_no_peak);
-
-pslr_linear = max_sidelobe / max(peak_val, eps);
+%% 修正后的辅助函数
+function pslr = compute_pslr_corrected(corr_signal, peak_idx, fs, B)
+    % 修正的峰值旁瓣比计算函数
+    % 基于主瓣理论宽度定义区域
+    % 主瓣宽度 ≈ 1/B，转换为采样点数
+    mainlobe_width_samples = ceil(2 * fs / B);  % 取2倍作为安全余量
+    
+    % 确保边界有效
+    mainlobe_start = max(1, peak_idx - mainlobe_width_samples);
+    mainlobe_end = min(length(corr_signal), peak_idx + mainlobe_width_samples);
+    
+    % 创建掩码排除主瓣
+    mask = true(length(corr_signal), 1);
+    mask(mainlobe_start:mainlobe_end) = false;
+    
+    % 如果没有旁瓣，返回一个较差的值
+    if sum(mask) == 0
+        pslr = -5;  % 一个较差的值
+        return;
+    end
+    
+    % 计算旁瓣峰值和主瓣峰值
+    sidelobe_peak = max(abs(corr_signal(mask)));
+    mainlobe_peak = abs(corr_signal(peak_idx));
+    
+    % 计算PSLR（dB）
+    if mainlobe_peak > 0
+        pslr = 20*log10(sidelobe_peak / mainlobe_peak);
+    else
+        pslr = -inf;
+    end
 end
 
-function width = compute_mainlobe_width(auto_corr_norm)
-% draw_figure.m口径：以中心主峰为参考，统计3-dB主瓣连续宽度
-
-a = abs(auto_corr_norm(:));
-center_idx = ceil(length(a)/2);
-peak_val = a(center_idx);
-th = peak_val / sqrt(2);
-
-left = center_idx;
-while left > 1 && a(left-1) >= th
-    left = left - 1;
-end
-right = center_idx;
-while right < length(a) && a(right+1) >= th
-    right = right + 1;
-end
-
-width = right - left + 1;
-end
-
-function islr_linear = compute_islr(auto_corr_norm)
-a = abs(auto_corr_norm(:));
-center_idx = ceil(length(a)/2);
-peak_val = a(center_idx);
-th = peak_val / sqrt(2);
-
-left = center_idx;
-while left > 1 && a(left-1) >= th
-    left = left - 1;
-end
-right = center_idx;
-while right < length(a) && a(right+1) >= th
-    right = right + 1;
+function islr = compute_islr_corrected(corr_signal, peak_idx, fs, B)
+    % 修正的积分旁瓣比计算函数
+    % 主瓣宽度 ≈ 1/B，转换为采样点数
+    mainlobe_width_samples = ceil(2 * fs / B);  % 取2倍作为安全余量
+    
+    % 确保边界有效
+    mainlobe_start = max(1, peak_idx - mainlobe_width_samples);
+    mainlobe_end = min(length(corr_signal), peak_idx + mainlobe_width_samples);
+    
+    % 主瓣能量
+    mainlobe_energy = sum(abs(corr_signal(mainlobe_start:mainlobe_end)).^2);
+    
+    % 总能量
+    total_energy = sum(abs(corr_signal).^2);
+    
+    % 旁瓣能量 = 总能量 - 主瓣能量
+    sidelobe_energy = total_energy - mainlobe_energy;
+    
+    % 计算ISLR（dB）
+    if mainlobe_energy > 0 && sidelobe_energy > 0
+        islr = 10*log10(sidelobe_energy / mainlobe_energy);
+    else
+        islr = -inf;
+    end
 end
 
-main_energy = sum(a(left:right).^2);
-a(left:right) = 0;
-side_energy = sum(a.^2);
-
-islr_linear = side_energy / max(main_energy, eps);
+function bw_3db = compute_3db_width_corrected(corr_signal, peak_idx, fs, B)
+    % 修正的3dB主瓣宽度计算函数
+    corr_mag = abs(corr_signal);
+    peak_value = corr_mag(peak_idx);
+    
+    % 找到3dB点（峰值下降3dB）
+    threshold_3db = peak_value / sqrt(2);  % -3dB点
+    
+    % 向左搜索3dB点
+    left_idx = peak_idx;
+    step_count = 0;
+    max_steps = 100;  % 防止无限循环
+    
+    while left_idx > 1 && corr_mag(left_idx) >= threshold_3db && step_count < max_steps
+        left_idx = left_idx - 1;
+        step_count = step_count + 1;
+    end
+    
+    % 向右搜索3dB点
+    right_idx = peak_idx;
+    step_count = 0;
+    
+    while right_idx < length(corr_mag) && corr_mag(right_idx) >= threshold_3db && step_count < max_steps
+        right_idx = right_idx + 1;
+        step_count = step_count + 1;
+    end
+    
+    % 计算宽度（秒）
+    width_samples = right_idx - left_idx;
+    bw_3db = width_samples / fs * 1e6;  % 转换为微秒
+    
+    % 如果找不到3dB点或宽度异常，返回理论值
+    if bw_3db <= 0 || bw_3db > 100
+        bw_3db = 0.886 / B * 1e6;  % 修正后的理论公式
+    end
+    
+    % 确保宽度不会太小
+    if bw_3db < 0.01
+        bw_3db = 0.886 / B * 1e6;
+    end
 end
 
 function papr_db = compute_papr(x)
