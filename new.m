@@ -30,7 +30,7 @@ cfg.enable_a0_nonnegative = true;  % a0 = 1-a1-a2 >=0
 cfg.band_limit = cfg.B/2;
 
 % 目标函数权重与目标阈值
-cfg.weights = struct('pslr',20.0,'islr',1.0,'bw',1.5,'papr',1.5,'spec',10);
+cfg.weights = struct('pslr',20.0,'islr',1.0,'bw',1.5,'papr',1.5,'spec',10,'spec_sys',60);
 cfg.targets = struct('pslr',-30,'islr',-20,'papr',0,'spec',0);
 cfg.spec_guard_factor = 5;   % 频谱不劣化约束权重因子
 
@@ -58,7 +58,7 @@ grid on;
 
 %% 步骤1: 生成理想LFM信号及其频谱
 [s_lfm, t, S_LFM_k] = generate_lfm_signal(cfg.B, cfg.T_pulse, cfg.fs, cfg.N_pulse, cfg.N_fft);
-cfg.spec_baseline_no_comp = compute_spectrum_error(S_LFM_k, S_LFM_k, cfg.freq, cfg.band_limit);
+cfg.spec_sys_baseline = compute_spectrum_error(S_LFM_k .* H_k, S_LFM_k, cfg.freq, cfg.band_limit);
 
 % 显示LFM信号及频谱（沿用 test.m 风格）
 figure('Position', [100, 100, 1200, 400]);
@@ -295,6 +295,7 @@ fprintf('\n频谱恢复误差(预补偿发射频谱 vs 原始LFM): %.4e\n', spec
 fprintf('频谱恢复误差(系统后无预补偿 vs 原始LFM): %.4e\n', spec_no_comp_sys);
 fprintf('频谱恢复误差(系统后有预补偿 vs 原始LFM): %.4e\n', spec_with_comp_sys);
 fprintf('系统后误差改善: %.4e\n', spec_no_comp_sys - spec_with_comp_sys);
+fprintf('系统后误差基线(无预补偿): %.4e\n', cfg.spec_sys_baseline);
 
 fprintf('\n=== 与固定Hamming基线对比（优化前后） ===\n');
 fprintf('基线PSLR/ISLR/BW/PAPR/SPEC: %.2f / %.2f / %.3f / %.2f / %.4e\n', ...
@@ -472,8 +473,9 @@ function J = objective_function(params, S_LFM_k, H_k, cfg)
 
     M = evaluate_metrics(sim.s_ideal, sim.s_no_comp, sim.s_with_comp, cfg);
     spec_error = compute_spectrum_error(sim.S_tx_k, S_LFM_k, cfg.freq, cfg.band_limit);
+    spec_error_sys = compute_spectrum_error(sim.S_out_k, S_LFM_k, cfg.freq, cfg.band_limit);
 
-    if any(~isfinite([M.with_comp.pslr, M.with_comp.islr, M.with_comp.bw3db, M.with_comp.papr, spec_error]))
+    if any(~isfinite([M.with_comp.pslr, M.with_comp.islr, M.with_comp.bw3db, M.with_comp.papr, spec_error, spec_error_sys]))
         J = big_penalty; return;
     end
 
@@ -482,21 +484,14 @@ function J = objective_function(params, S_LFM_k, H_k, cfg)
     bw_penalty = max(0, (M.with_comp.bw3db - M.ideal.bw3db) / M.ideal.bw3db)^2;
     papr_penalty = max(0, M.with_comp.papr - cfg.targets.papr)^2;
     spec_penalty = max(0, spec_error - cfg.targets.spec)^2;
-
-    % 向后兼容：若旧版配置中仍有 spec_guard_factor，则允许以 0 惩罚安全运行。
-    spec_guard_penalty = 0;
-    if isfield(cfg, 'spec_guard_factor')
-        spec_guard_factor = cfg.spec_guard_factor;
-    else
-        spec_guard_factor = 0;
-    end
+    spec_sys_penalty = max(0, spec_error_sys - cfg.spec_sys_baseline)^2;
 
     J = cfg.weights.pslr * pslr_penalty + ...
         cfg.weights.islr * islr_penalty + ...
         cfg.weights.bw   * bw_penalty + ...
         cfg.weights.papr * papr_penalty + ...
         cfg.weights.spec * spec_penalty + ...
-        cfg.weights.spec * spec_guard_factor * spec_guard_penalty;
+        cfg.weights.spec_sys * spec_sys_penalty;
 
     if ~isfinite(J)
         J = big_penalty;
