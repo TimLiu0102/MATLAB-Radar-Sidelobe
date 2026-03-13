@@ -80,7 +80,6 @@ grid on;
 base_params = struct('alpha_reg', cfg.alpha_baseline, 'a1', 0.46, 'a2', 0, 'a0', 0.54);
 base_out = simulate_transmit_signal(base_params, S_LFM_k, H_k, cfg, 'hamming');
 base_metrics = evaluate_metrics(base_out.s_ideal, base_out.s_no_comp, base_out.s_with_comp, cfg);
-base_spec_error = compute_spectrum_error(base_out.S_tx_k, S_LFM_k, cfg.freq, cfg.band_limit);
 
 %% 步骤3: 联合优化（差分进化 DE，全局无导数优化）
 [best_params, best_obj, best_out] = optimize_joint_parameters(S_LFM_k, H_k, cfg);
@@ -213,8 +212,7 @@ PAPR_ideal = 10*log10(max(abs(s_ideal).^2) / mean(abs(s_ideal).^2));
 PAPR_no_comp = 10*log10(max(abs(s_with_H).^2) / mean(abs(s_with_H).^2));
 PAPR_with_comp = 10*log10(max(abs(s_tx_with_H).^2) / mean(abs(s_tx_with_H).^2));
 
-% 频谱恢复误差（显式纳入输出）
-spec_no_comp = compute_spectrum_error(S_LFM_k, S_LFM_k, cfg.freq, cfg.band_limit);
+% 频谱恢复误差（定义：预补偿发射频谱 vs 原始LFM频谱）
 spec_with_comp = compute_spectrum_error(best_out.S_tx_k, S_LFM_k, cfg.freq, cfg.band_limit);
 
 % 右侧文字汇总区（test.m 样式）
@@ -240,8 +238,7 @@ text_str = [text_str sprintf('联合优化有预补偿: %.2f dB\n', PAPR_with_co
 text_str = [text_str sprintf('PAPR增加: %.2f dB\n', PAPR_with_comp - PAPR_ideal)];
 
 text_str = [text_str sprintf('\n=== 频谱恢复误差(NMSE, 方案A) ===\n')];
-text_str = [text_str sprintf('无预补偿(按该定义): %.4e\n', spec_no_comp)];
-text_str = [text_str sprintf('联合优化有预补偿: %.4e\n', spec_with_comp)];
+text_str = [text_str sprintf('预补偿发射频谱 vs 原始LFM: %.4e\n', spec_with_comp)];
 
 text(0.05, 0.5, text_str, 'FontName', 'FixedWidth', 'FontSize', 10, 'VerticalAlignment', 'middle');
 title('性能指标汇总（修正后）');
@@ -265,7 +262,7 @@ improvement_data = [pslr_ideal, pslr_no_comp, pslr_with_comp; ...
                     islr_ideal, islr_no_comp, islr_with_comp; ...
                     bw3db_ideal, bw3db_no_comp, bw3db_with_comp; ...
                     PAPR_ideal, PAPR_no_comp, PAPR_with_comp; ...
-                    0, spec_no_comp, spec_with_comp];
+                    0, 0, spec_with_comp];
 bar_labels = {'理想LFM', '无预补偿', '有预补偿'};
 bar(improvement_data');
 set(gca, 'XTickLabel', bar_labels);
@@ -287,12 +284,11 @@ fprintf('实测主瓣宽度 - 有预补偿: %.3f μs\n', bw3db_with_comp);
 fprintf('\nPAPR - 理想LFM: %.2f dB\n', PAPR_ideal);
 fprintf('PAPR - 无预补偿: %.2f dB\n', PAPR_no_comp);
 fprintf('PAPR - 有预补偿: %.2f dB（增加 %.2f dB）\n', PAPR_with_comp, PAPR_with_comp - PAPR_ideal);
-fprintf('\n频谱恢复误差 - 无预补偿(按该定义): %.4e\n', spec_no_comp);
-fprintf('频谱恢复误差 - 有预补偿: %.4e\n', spec_with_comp);
+fprintf('\n频谱恢复误差(预补偿发射频谱 vs 原始LFM): %.4e\n', spec_with_comp);
 
 fprintf('\n=== 与固定Hamming基线对比（优化前后） ===\n');
 fprintf('基线PSLR/ISLR/BW/PAPR/SPEC: %.2f / %.2f / %.3f / %.2f / %.4e\n', ...
-    base_metrics.with_comp.pslr, base_metrics.with_comp.islr, base_metrics.with_comp.bw3db, base_metrics.with_comp.papr, base_spec_error);
+    base_metrics.with_comp.pslr, base_metrics.with_comp.islr, base_metrics.with_comp.bw3db, base_metrics.with_comp.papr, compute_spectrum_error(base_out.S_tx_k, S_LFM_k, cfg.freq, cfg.band_limit));
 fprintf('联合PSLR/ISLR/BW/PAPR/SPEC: %.2f / %.2f / %.3f / %.2f / %.4e\n', ...
     pslr_with_comp, islr_with_comp, bw3db_with_comp, PAPR_with_comp, spec_with_comp);
 
@@ -476,8 +472,6 @@ function J = objective_function(params, S_LFM_k, H_k, cfg)
     bw_penalty = max(0, (M.with_comp.bw3db - M.ideal.bw3db) / M.ideal.bw3db)^2;
     papr_penalty = max(0, M.with_comp.papr - cfg.targets.papr)^2;
     spec_penalty = max(0, spec_error - cfg.targets.spec)^2;
-    spec_guard_penalty = max(0, spec_error - cfg.spec_baseline_no_comp)^2;
-
     J = cfg.weights.pslr * pslr_penalty + ...
         cfg.weights.islr * islr_penalty + ...
         cfg.weights.bw   * bw_penalty + ...
