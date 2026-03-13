@@ -56,6 +56,13 @@ base_metrics = evaluate_metrics(base_case.s_out, cfg.fs, cfg.mainlobe_guard);
 base_metrics.papr_db = 10*log10(max(abs(base_case.s_tx).^2) / mean(abs(base_case.s_tx).^2));
 base_metrics.spec_error = compute_spectrum_error(S_ideal_k, base_case.S_out_k, cfg.freq, cfg.B);
 
+<<<<<<< codex/refactor-matlab-code-for-joint-optimization-peirmg
+% 固定参数预补偿（不加窗）——用于你要求的误差对比
+base_nowin_case = simulate_transmit_signal(S_ideal_k, H_k, G_base, cfg.N_pulse, cfg.N_fft);
+base_nowin_err = evaluate_reference_error(base_nowin_case.s_out, S_ideal_k, cfg.N_pulse, cfg.N_fft, cfg.freq, cfg.B);
+
+=======
+>>>>>>> master
 %% 4) 联合优化：网格粗细两阶段搜索
 opt = optimize_joint_parameters(S_ideal_k, S_ideal_k_raw, H_k, cfg, weights, metrics_ideal);
 
@@ -95,11 +102,23 @@ else
     method_name = 'Grid(粗细两阶段)';
 end
 
+<<<<<<< codex/refactor-matlab-code-for-joint-optimization-peirmg
+% 优化参数生成的预补偿（不加窗）——用于你要求的误差对比
+G_opt_nowin = compute_precomp_filter(S_ideal_k_raw, H_k, final_opt.alpha_reg, cfg.A_max);
+opt_nowin_case = simulate_transmit_signal(S_ideal_k, H_k, G_opt_nowin, cfg.N_pulse, cfg.N_fft);
+opt_nowin_err = evaluate_reference_error(opt_nowin_case.s_out, S_ideal_k, cfg.N_pulse, cfg.N_fft, cfg.freq, cfg.B);
+
+=======
+>>>>>>> master
 %% 5) 无补偿情况（用于对比）
 no_comp_case = simulate_transmit_signal(S_ideal_k, H_k, ones(cfg.N_fft,1), cfg.N_pulse, cfg.N_fft);
 no_comp_metrics = evaluate_metrics(no_comp_case.s_out, cfg.fs, cfg.mainlobe_guard);
 no_comp_metrics.papr_db = 10*log10(max(abs(no_comp_case.s_tx).^2) / mean(abs(no_comp_case.s_tx).^2));
 no_comp_metrics.spec_error = compute_spectrum_error(S_ideal_k, no_comp_case.S_out_k, cfg.freq, cfg.B);
+<<<<<<< codex/refactor-matlab-code-for-joint-optimization-peirmg
+no_comp_err = evaluate_reference_error(no_comp_case.s_out, S_ideal_k, cfg.N_pulse, cfg.N_fft, cfg.freq, cfg.B);
+=======
+>>>>>>> master
 
 % 理想项补全便于表格输出
 metrics_ideal.papr_db = 10*log10(max(abs(ideal_case.s_tx).^2)/(mean(abs(ideal_case.s_tx).^2)+eps));
@@ -122,6 +141,17 @@ T = table(Row, PSLR, ISLR, BWus, PAPR, SPEC, ...
     'VariableNames', {'Case','PSLR_dB','ISLR_dB','BW3dB_us','PAPR_dB','SpecErr_NMSE'});
 disp(T);
 
+<<<<<<< codex/refactor-matlab-code-for-joint-optimization-peirmg
+% 你要求的误差对比：均以“信号 - 原始LFM信号”为准，且预补偿均不加窗
+ErrCase = {'No precomp + system'; 'Fixed precomp(no window) + system'; 'Optimized precomp(no window) + system'};
+TimeNMSE = [no_comp_err.time_nmse; base_nowin_err.time_nmse; opt_nowin_err.time_nmse];
+SpecNMSE = [no_comp_err.spec_nmse; base_nowin_err.spec_nmse; opt_nowin_err.spec_nmse];
+T_err = table(ErrCase, TimeNMSE, SpecNMSE, 'VariableNames', {'Case','TimeNMSE_vs_OriginalLFM','SpecNMSE_vs_OriginalLFM'});
+fprintf('\n=== 按你的要求的误差对比（均不加窗）===\n');
+disp(T_err);
+
+=======
+>>>>>>> master
 %% 7) 绘图（保持与draw_figure.m相近风格并扩展）
 S_ideal_mag = fftshift(abs(S_ideal_k));
 S_no_mag = fftshift(abs(no_comp_case.S_out_k));
@@ -175,6 +205,15 @@ set(gca, 'XTickLabel', {'No compensation','Joint optimized'});
 legend({'PSLR(dB)','ISLR(dB)','BW3dB(\mus)','PAPR(dB)','SpecErr'}, 'Location', 'bestoutside');
 title('关键性能指标柱状对比');
 
+<<<<<<< codex/refactor-matlab-code-for-joint-optimization-peirmg
+figure(7);
+err_bar = [no_comp_err.time_nmse, no_comp_err.spec_nmse; base_nowin_err.time_nmse, base_nowin_err.spec_nmse; opt_nowin_err.time_nmse, opt_nowin_err.spec_nmse];
+bar(err_bar); grid on;
+set(gca,'XTickLabel',{'NoPrecomp+H','FixedPrecomp(noW)+H','OptimizedPrecomp(noW)+H'});
+legend({'Time NMSE','Spectrum NMSE'}, 'Location','best');
+title('按要求的误差对比（均相对原始LFM）');
+=======
+>>>>>>> master
 
 %% ======================= 本文件局部函数 =======================
 function [s_lfm, S_lfm_k, t] = generate_lfm_signal(B, T_pulse, fs, N_pulse, N_fft)
@@ -308,15 +347,28 @@ function [J, sim, metrics] = objective_function(params, S_ideal_k, S_ideal_k_raw
     end
 
     sim = simulate_transmit_signal(S_ideal_k, H_k, G.*W, cfg.N_pulse, cfg.N_fft);
+<<<<<<< codex/refactor-matlab-code-for-joint-optimization-peirmg
+    sim_no_window = simulate_transmit_signal(S_ideal_k, H_k, G, cfg.N_pulse, cfg.N_fft);
+=======
+>>>>>>> master
     if any(~isfinite(sim.s_tx)) || any(~isfinite(sim.s_out))
         J = huge; metrics = []; return;
     end
 
     metrics = evaluate_metrics(sim.s_out, cfg.fs, cfg.mainlobe_guard);
     metrics.papr_db = 10*log10(max(abs(sim.s_tx).^2) / (mean(abs(sim.s_tx).^2)+eps));
+<<<<<<< codex/refactor-matlab-code-for-joint-optimization-peirmg
+    % 按要求：优化中的误差项基于“预补偿不加窗”与原始LFM比较
+    err_nowin = evaluate_reference_error(sim_no_window.s_out, S_ideal_k, cfg.N_pulse, cfg.N_fft, cfg.freq, cfg.B);
+    metrics.time_error = err_nowin.time_nmse;
+    metrics.spec_error = err_nowin.spec_nmse;
+
+    if any(~isfinite([metrics.pslr_db, metrics.islr_db, metrics.bw3db_s, metrics.papr_db, metrics.time_error, metrics.spec_error]))
+=======
     metrics.spec_error = compute_spectrum_error(S_ideal_k, sim.S_out_k, cfg.freq, cfg.B);
 
     if any(~isfinite([metrics.pslr_db, metrics.islr_db, metrics.bw3db_s, metrics.papr_db, metrics.spec_error]))
+>>>>>>> master
         J = huge; return;
     end
 
@@ -324,7 +376,11 @@ function [J, sim, metrics] = objective_function(params, S_ideal_k, S_ideal_k_raw
     islr_pen = max(0, metrics.islr_db - cfg.islr_target)^2;
     bw_pen = max(0, (metrics.bw3db_s - metrics_ideal.bw3db_s)/(metrics_ideal.bw3db_s+eps))^2;
     papr_pen = max(0, metrics.papr_db - cfg.papr_ref)^2;
+<<<<<<< codex/refactor-matlab-code-for-joint-optimization-peirmg
+    spec_pen = 0.5 * (metrics.time_error + metrics.spec_error);
+=======
     spec_pen = metrics.spec_error;
+>>>>>>> master
 
     J = weights.pslr*pslr_pen + weights.islr*islr_pen + weights.bw*bw_pen + ...
         weights.papr*papr_pen + weights.spec*spec_pen;
@@ -383,6 +439,23 @@ function [bestJ, bestx, bestsim, bestmet] = grid_search(alpha_grid, a1_grid, a2_
     end
 end
 
+<<<<<<< codex/refactor-matlab-code-for-joint-optimization-peirmg
+
+function err = evaluate_reference_error(s_cmp, S_ideal_k, N_pulse, N_fft, freq, B)
+    s_ideal = ifft(S_ideal_k, N_fft);
+    s_ideal = s_ideal(1:N_pulse);
+    s_ideal = s_ideal / sqrt(sum(abs(s_ideal).^2) + eps);
+    s_cmp = s_cmp / sqrt(sum(abs(s_cmp).^2) + eps);
+
+    err.time_nmse = norm(s_cmp - s_ideal, 2)^2 / (norm(s_ideal,2)^2 + eps);
+
+    s_cmp_pad = zeros(N_fft,1); s_cmp_pad(1:N_pulse) = s_cmp;
+    S_cmp = fft(s_cmp_pad, N_fft);
+    err.spec_nmse = compute_spectrum_error(S_ideal_k, S_cmp, freq, B);
+end
+
+=======
+>>>>>>> master
 function [t_corr, ac_i, ac_n, ac_o] = local_autocorr_compare(s_ideal, s_no, s_opt, fs)
     ac_i = xcorr(s_ideal, s_ideal); ac_i = ac_i/max(abs(ac_i)+eps);
     ac_n = xcorr(s_no, s_no);       ac_n = ac_n/max(abs(ac_n)+eps);
