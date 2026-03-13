@@ -289,10 +289,8 @@ islr_db = compute_islr_corrected(auto_corr, peak_idx, fs, B);
 mainlobe_width = compute_3db_width_corrected(auto_corr, peak_idx, fs, B);
 papr_db = compute_papr(s_out);
 
-pslr_linear = 10^(pslr_db/20);
-islr_linear = 10^(islr_db/10);
-
-J = pslr_linear + islr_linear ...
+% NEW: 在J函数中使用dB量的PSLR与ISLR
+J = pslr_db + islr_db ...
     + lambda1 * max(0, mainlobe_width - mlw_ham)^2 ...
     + lambda2 * max(0, papr_db - papr_ham)^2;
 end
