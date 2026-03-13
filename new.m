@@ -215,6 +215,10 @@ PAPR_with_comp = 10*log10(max(abs(s_tx_with_H).^2) / mean(abs(s_tx_with_H).^2));
 % 频谱恢复误差（定义：预补偿发射频谱 vs 原始LFM频谱）
 spec_with_comp = compute_spectrum_error(best_out.S_tx_k, S_LFM_k, cfg.freq, cfg.band_limit);
 
+% 误差对比（经过系统后）：无预补偿 vs 有预补偿
+spec_no_comp_sys = compute_spectrum_error(best_out.S_no_comp_out_k, S_LFM_k, cfg.freq, cfg.band_limit);
+spec_with_comp_sys = compute_spectrum_error(best_out.S_out_k, S_LFM_k, cfg.freq, cfg.band_limit);
+
 % 右侧文字汇总区（test.m 样式）
 subplot(3,3,[3,6,9]);
 axis off;
@@ -239,6 +243,9 @@ text_str = [text_str sprintf('PAPR增加: %.2f dB\n', PAPR_with_comp - PAPR_idea
 
 text_str = [text_str sprintf('\n=== 频谱恢复误差(NMSE, 方案A) ===\n')];
 text_str = [text_str sprintf('预补偿发射频谱 vs 原始LFM: %.4e\n', spec_with_comp)];
+text_str = [text_str sprintf('系统后无预补偿 vs 原始LFM: %.4e\n', spec_no_comp_sys)];
+text_str = [text_str sprintf('系统后有预补偿 vs 原始LFM: %.4e\n', spec_with_comp_sys)];
+text_str = [text_str sprintf('系统后误差改善: %.4e\n', spec_no_comp_sys - spec_with_comp_sys)];
 
 text(0.05, 0.5, text_str, 'FontName', 'FixedWidth', 'FontSize', 10, 'VerticalAlignment', 'middle');
 title('性能指标汇总（修正后）');
@@ -285,6 +292,9 @@ fprintf('\nPAPR - 理想LFM: %.2f dB\n', PAPR_ideal);
 fprintf('PAPR - 无预补偿: %.2f dB\n', PAPR_no_comp);
 fprintf('PAPR - 有预补偿: %.2f dB（增加 %.2f dB）\n', PAPR_with_comp, PAPR_with_comp - PAPR_ideal);
 fprintf('\n频谱恢复误差(预补偿发射频谱 vs 原始LFM): %.4e\n', spec_with_comp);
+fprintf('频谱恢复误差(系统后无预补偿 vs 原始LFM): %.4e\n', spec_no_comp_sys);
+fprintf('频谱恢复误差(系统后有预补偿 vs 原始LFM): %.4e\n', spec_with_comp_sys);
+fprintf('系统后误差改善: %.4e\n', spec_no_comp_sys - spec_with_comp_sys);
 
 fprintf('\n=== 与固定Hamming基线对比（优化前后） ===\n');
 fprintf('基线PSLR/ISLR/BW/PAPR/SPEC: %.2f / %.2f / %.3f / %.2f / %.4e\n', ...
