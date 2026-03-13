@@ -472,12 +472,21 @@ function J = objective_function(params, S_LFM_k, H_k, cfg)
     bw_penalty = max(0, (M.with_comp.bw3db - M.ideal.bw3db) / M.ideal.bw3db)^2;
     papr_penalty = max(0, M.with_comp.papr - cfg.targets.papr)^2;
     spec_penalty = max(0, spec_error - cfg.targets.spec)^2;
+
+    % 向后兼容：若旧版配置中仍有 spec_guard_factor，则允许以 0 惩罚安全运行。
+    spec_guard_penalty = 0;
+    if isfield(cfg, 'spec_guard_factor')
+        spec_guard_factor = cfg.spec_guard_factor;
+    else
+        spec_guard_factor = 0;
+    end
+
     J = cfg.weights.pslr * pslr_penalty + ...
         cfg.weights.islr * islr_penalty + ...
         cfg.weights.bw   * bw_penalty + ...
         cfg.weights.papr * papr_penalty + ...
         cfg.weights.spec * spec_penalty + ...
-        cfg.weights.spec * cfg.spec_guard_factor * spec_guard_penalty;
+        cfg.weights.spec * spec_guard_factor * spec_guard_penalty;
 
     if ~isfinite(J)
         J = big_penalty;
