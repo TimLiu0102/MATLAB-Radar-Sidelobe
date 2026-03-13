@@ -21,9 +21,9 @@ cfg.A_max = 4.0;
 cfg.alpha_baseline = 1e-2;
 
 % 优化约束
-cfg.bounds.alpha = [1e-6, 1e-1];
-cfg.bounds.a1 = [0, 1];
-cfg.bounds.a2 = [0, 1];
+cfg.bounds.alpha = [1e-7, 1e-2];
+cfg.bounds.a1 = [0.01, 1];
+cfg.bounds.a2 = [0.01, 1];
 cfg.enable_a0_nonnegative = true;  % a0 = 1-a1-a2 >=0
 cfg.enable_fmincon = true;
 
@@ -31,8 +31,8 @@ cfg.enable_fmincon = true;
 cfg.band_limit = cfg.B/2;
 
 % 目标函数权重与目标阈值
-cfg.weights = struct('pslr',1.0,'islr',1.0,'bw',0.8,'papr',0.5,'spec',1.2);
-cfg.targets = struct('pslr',-25,'islr',-15,'papr',5.5);
+cfg.weights = struct('pslr',20.0,'islr',1.0,'bw',1.5,'papr',1.5,'spec',10);
+cfg.targets = struct('pslr',-30,'islr',-20,'papr',0,'spec',0);
 
 % 显示参数
 f_center_idx = find(abs(cfg.freq)<=cfg.B/2);
@@ -466,7 +466,7 @@ function J = objective_function(params, S_LFM_k, H_k, cfg)
     islr_penalty = max(0, M.with_comp.islr - cfg.targets.islr)^2;
     bw_penalty = max(0, (M.with_comp.bw3db - M.ideal.bw3db) / M.ideal.bw3db)^2;
     papr_penalty = max(0, M.with_comp.papr - cfg.targets.papr)^2;
-    spec_penalty = spec_error;
+    spec_penalty = max(0, M.with_comp.papr - cfg.targets.papr)^2;
 
     J = cfg.weights.pslr * pslr_penalty + ...
         cfg.weights.islr * islr_penalty + ...
