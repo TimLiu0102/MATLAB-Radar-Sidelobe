@@ -68,165 +68,263 @@ if max_G > A_max
     G_tx_k = G_tx_k ./ max(1, G_tx_mag/A_max);
 end
 
-%% 步骤3: 频域窗/带宽约束 - 使用矩形窗
-% 创建海明窗：带宽内为1，带宽外为0
+%% 步骤3: 频域窗函数设计（Baseline + NEW）
 f_idx = find(abs(freq)<=B);
-%创建海明窗
+L = length(f_idx);
+
+% Baseline: 原有海明窗
 hamming_window = zeros(N_fft, 1);
-% 生成对应带宽长度的海明窗（仅在LFM信号带宽内施加海明窗，带宽外为0）
-hamming_win_local = hamming(length(f_idx));  % 生成局部海明窗
-hamming_window(f_idx) = hamming_win_local;   % 填充到频域对应位置
-W_k = fftshift(hamming_window);      % 转换为FFT顺序
-% 应用海明窗
-G_tx_k_windowed = G_tx_k .* W_k;
+hamming_win_local = hamming(L);
+hamming_window(f_idx) = hamming_win_local;
+W_hamming_k = fftshift(hamming_window);
 
-%% 步骤4: 形成发射频谱并IFFT回时域
-% 应用预补偿：S_tx[k] = S_LFM[k] * G_tx[k] * W[k]
-S_tx_k = S_LFM_k .* G_tx_k_windowed;
-
-% IFFT得到时域信号
-s_tx_time = ifft(S_tx_k, N_fft);
-
-% 截取有效部分（保留原始脉冲长度）
-s_tx_pulse = s_tx_time(1:N_pulse);
-
-% 能量归一化（而不是幅度归一化）
-s_tx_pulse = s_tx_pulse / sqrt(sum(abs(s_tx_pulse).^2));
-
-%% 步骤5: 准备对比信号（统一能量归一化）
-% 情况1: 理想LFM（作为参考基准）
+% 先计算无补偿和理想信号（用于基准指标）
 s_ideal = s_lfm / sqrt(sum(abs(s_lfm).^2));
-
-% 情况2: 原始LFM经过系统H（无预补偿）
-S_LFM_full = fft(s_lfm_padded, N_fft);
-S_with_H = S_LFM_full .* H_k;  % 经过系统响应
+S_with_H = S_LFM_k .* H_k;
 s_with_H_time = ifft(S_with_H, N_fft);
 s_with_H = s_with_H_time(1:N_pulse);
 s_with_H = s_with_H / sqrt(sum(abs(s_with_H).^2));
 
-% 情况3: 预补偿LFM经过系统H（有预补偿）
-S_tx_full = fft(s_tx_time, N_fft);  % 预补偿信号频谱
-S_tx_with_H = S_tx_full .* H_k;  % 经过系统响应
-s_tx_with_H_time = ifft(S_tx_with_H, N_fft);
-s_tx_with_H = s_tx_with_H_time(1:N_pulse);
-s_tx_with_H = s_tx_with_H / sqrt(sum(abs(s_tx_with_H).^2));
+% Baseline链路: 预补偿 + Hamming窗
+S_tx_hamming_k = S_LFM_k .* (G_tx_k .* W_hamming_k);
+s_tx_hamming_time = ifft(S_tx_hamming_k, N_fft);
+s_tx_hamming_pulse = s_tx_hamming_time(1:N_pulse);
+s_tx_hamming_pulse = s_tx_hamming_pulse / sqrt(sum(abs(s_tx_hamming_pulse).^2));
+S_tx_hamming_full = fft(s_tx_hamming_time, N_fft);
+S_tx_hamming_with_H = S_tx_hamming_full .* H_k;
+s_tx_hamming_with_H_time = ifft(S_tx_hamming_with_H, N_fft);
+s_tx_hamming_with_H = s_tx_hamming_with_H_time(1:N_pulse);
+s_tx_hamming_with_H = s_tx_hamming_with_H / sqrt(sum(abs(s_tx_hamming_with_H).^2));
 
-%% 步骤6: 自相关分析
-% 计算自相关函数
-t_corr = (-N_pulse+1:N_pulse-1) / fs * 1e6;  % 微秒
+% Baseline指标
+auto_corr_hamming = xcorr(s_tx_hamming_with_H, s_tx_hamming_with_H);
+auto_corr_hamming = auto_corr_hamming / max(abs(auto_corr_hamming));
+PSLR_hamming_linear = compute_pslr(auto_corr_hamming);
+PSLR_hamming = 20*log10(PSLR_hamming_linear + 1e-12);
+mainlobe_width_hamming = compute_mainlobe_width(auto_corr_hamming);
+PAPR_hamming = compute_papr(s_tx_hamming_with_H);
 
-% 计算三种情况的自相关
+%% NEW: 优化广义余弦窗设计
+%% NEW: 萤火虫算法优化
+rng(1);
+lambda1 = 10;
+lambda2 = 1;
+fa_opt.pop_size = 20;
+fa_opt.max_iter = 30;
+fa_opt.beta0 = 1;
+fa_opt.gamma = 1;
+fa_opt.alpha = 0.2;
+
+best_coeff = optimize_generalized_cosine_fa(...
+    G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, ...
+    mainlobe_width_hamming, PAPR_hamming, ...
+    lambda1, lambda2, fa_opt);
+
+opt_gc_local = build_generalized_cosine_window(L, best_coeff);
+opt_gc_window = zeros(N_fft, 1);
+opt_gc_window(f_idx) = opt_gc_local;
+W_opt_k = fftshift(opt_gc_window);
+
+% 优化窗链路
+S_tx_opt_k = S_LFM_k .* (G_tx_k .* W_opt_k);
+s_tx_opt_time = ifft(S_tx_opt_k, N_fft);
+s_tx_opt_pulse = s_tx_opt_time(1:N_pulse);
+s_tx_opt_pulse = s_tx_opt_pulse / sqrt(sum(abs(s_tx_opt_pulse).^2));
+S_tx_opt_full = fft(s_tx_opt_time, N_fft);
+S_tx_opt_with_H = S_tx_opt_full .* H_k;
+s_tx_opt_with_H_time = ifft(S_tx_opt_with_H, N_fft);
+s_tx_opt_with_H = s_tx_opt_with_H_time(1:N_pulse);
+s_tx_opt_with_H = s_tx_opt_with_H / sqrt(sum(abs(s_tx_opt_with_H).^2));
+
+%% 步骤4: 自相关与指标计算
+% 理想、失真、Hamming、优化窗
 auto_corr_ideal = xcorr(s_ideal, s_ideal);
 auto_corr_no_comp = xcorr(s_with_H, s_with_H);
-auto_corr_with_comp = xcorr(s_tx_with_H, s_tx_with_H);
+auto_corr_opt = xcorr(s_tx_opt_with_H, s_tx_opt_with_H);
 
-% 归一化自相关（能量归一化）
 auto_corr_ideal = auto_corr_ideal / max(abs(auto_corr_ideal));
 auto_corr_no_comp = auto_corr_no_comp / max(abs(auto_corr_no_comp));
-auto_corr_with_comp = auto_corr_with_comp / max(abs(auto_corr_with_comp));
+auto_corr_opt = auto_corr_opt / max(abs(auto_corr_opt));
 
-% 转换为dB显示
 auto_corr_ideal_db = 20*log10(abs(auto_corr_ideal) + 1e-10);
 auto_corr_no_comp_db = 20*log10(abs(auto_corr_no_comp) + 1e-10);
-auto_corr_with_comp_db = 20*log10(abs(auto_corr_with_comp) + 1e-10);
+auto_corr_hamming_db = 20*log10(abs(auto_corr_hamming) + 1e-10);
+auto_corr_opt_db = 20*log10(abs(auto_corr_opt) + 1e-10);
 
-center_idx = ceil(length(t_corr)/2);
-range_idx = center_idx-50:center_idx+50;
-%% 步骤7: 综合性能分析
-% 频域对比
-figure(1);
-s_ideal_padded = zeros(N_fft, 1);
-s_ideal_padded(1:N_pulse) = s_ideal;
+t_corr = (-N_pulse+1:N_pulse-1) / fs * 1e6;
+
+PSLR_ideal = 20*log10(compute_pslr(auto_corr_ideal) + 1e-12);
+PSLR_no_comp = 20*log10(compute_pslr(auto_corr_no_comp) + 1e-12);
+PSLR_opt = 20*log10(compute_pslr(auto_corr_opt) + 1e-12);
+
+mainlobe_width_ideal = compute_mainlobe_width(auto_corr_ideal);
+mainlobe_width_no_comp = compute_mainlobe_width(auto_corr_no_comp);
+mainlobe_width_opt = compute_mainlobe_width(auto_corr_opt);
+
+PAPR_ideal = compute_papr(s_ideal);
+PAPR_no_comp = compute_papr(s_with_H);
+PAPR_opt = compute_papr(s_tx_opt_with_H);
+
+%% 步骤5: 关键图输出（仅保留关键对比图）
+% 频谱准备
+s_ideal_padded = zeros(N_fft, 1); s_ideal_padded(1:N_pulse) = s_ideal;
+s_with_H_padded = zeros(N_fft, 1); s_with_H_padded(1:N_pulse) = s_with_H;
+s_hamming_padded = zeros(N_fft, 1); s_hamming_padded(1:N_pulse) = s_tx_hamming_with_H;
+s_opt_padded = zeros(N_fft, 1); s_opt_padded(1:N_pulse) = s_tx_opt_with_H;
+
 S_ideal_mag = fftshift(abs(fft(s_ideal_padded, N_fft)));
-
-s_with_H_padded = zeros(N_fft, 1);
-s_with_H_padded(1:N_pulse) = s_with_H;
 S_no_comp_mag = fftshift(abs(fft(s_with_H_padded, N_fft)));
+S_hamming_mag = fftshift(abs(fft(s_hamming_padded, N_fft)));
+S_opt_mag = fftshift(abs(fft(s_opt_padded, N_fft)));
 
-s_tx_with_H_padded = zeros(N_fft, 1);
-s_tx_with_H_padded(1:N_pulse) = s_tx_with_H;
-S_with_comp_mag = fftshift(abs(fft(s_tx_with_H_padded, N_fft)));
-
-plot(freq/1e6, 20*log10(S_ideal_mag/max(S_ideal_mag)), 'k-', 'LineWidth', 1.5); hold on;
-plot(freq/1e6, 20*log10(S_no_comp_mag/max(S_no_comp_mag)), 'r--', 'LineWidth', 1.5);
-plot(freq/1e6, 20*log10(S_with_comp_mag/max(S_with_comp_mag)), 'b-.', 'LineWidth', 1.5);
-xlim([-B/1e6*1.5, B/1e6*1.5]); ylim([-100, 5]);
-xlabel('Frequency (MHz)'); ylabel('Amplitude (dB)');
-legend('LFM', 'S_{out}(f)', 'S_{tx}(f)', 'Location', 'best');
+% 图1：窗形对比
+figure(1);
+plot(0:L-1, hamming_win_local, 'b-', 'LineWidth', 1.5); hold on;
+plot(0:L-1, opt_gc_local, 'r--', 'LineWidth', 1.5);
+xlabel('Window Sample Index'); ylabel('Amplitude');
+legend('Hamming', 'Optimized generalized cosine', 'Location', 'best');
 grid on;
 
-% 理想和无补偿自相关
-% 归一化
+% 图2：自相关对比图
 figure(2);
-plot(t_corr(range_idx), abs(auto_corr_ideal(range_idx)), 'k-', 'LineWidth', 1.5); hold on;
-plot(t_corr(range_idx), abs(auto_corr_no_comp(range_idx)), 'r--', 'LineWidth', 1.5);
-xlabel('Time Delay(μs)'); ylabel('Normalized Amplitude');
-legend('LFM', 'S_{out}(f)', 'Location', 'best');
-grid on;
-
-% 对数
-figure(3)
 plot(t_corr, auto_corr_ideal_db, 'k-', 'LineWidth', 1.5); hold on;
 plot(t_corr, auto_corr_no_comp_db, 'r--', 'LineWidth', 1.5);
-xlabel('Time Delay (μs)'); ylabel('Amplitude (dB)');
-legend('LFM', 'S_{out}(f)', 'Location', 'best');
-grid on;
-ylim([-120, 0]);
+plot(t_corr, auto_corr_hamming_db, 'b-.', 'LineWidth', 1.5);
+plot(t_corr, auto_corr_opt_db, 'm-', 'LineWidth', 1.5);
+xlabel('Time Delay (\mus)'); ylabel('Autocorrelation (dB)');
+legend('Ideal LFM', 'Distorted output', 'Hamming window', 'Optimized generalized cosine', 'Location', 'best');
+ylim([-120, 0]); grid on;
 
-% 预补偿和无补偿自相关
-% 归一化
-figure(4);
-plot(t_corr(range_idx), abs(auto_corr_no_comp(range_idx)), 'r--', 'LineWidth', 1.5);hold on;
-plot(t_corr(range_idx), abs(auto_corr_with_comp(range_idx)), 'b-', 'LineWidth', 1.5);
-xlabel('Time Delay(μs)'); ylabel('Normalized Amplitude');
-legend( 'S_{out}(f)', 'S_{tx}(f)', 'Location', 'best');
-grid on;
+% 图3：频谱幅度对比图
+figure(3);
+plot(freq/1e6, 20*log10(S_ideal_mag/max(S_ideal_mag) + 1e-12), 'k-', 'LineWidth', 1.5); hold on;
+plot(freq/1e6, 20*log10(S_no_comp_mag/max(S_no_comp_mag) + 1e-12), 'r--', 'LineWidth', 1.5);
+plot(freq/1e6, 20*log10(S_hamming_mag/max(S_hamming_mag) + 1e-12), 'b-.', 'LineWidth', 1.5);
+plot(freq/1e6, 20*log10(S_opt_mag/max(S_opt_mag) + 1e-12), 'm-', 'LineWidth', 1.5);
+xlabel('Frequency (MHz)'); ylabel('Magnitude (dB)');
+legend('Ideal LFM', 'Distorted output', 'Hamming window', 'Optimized generalized cosine', 'Location', 'best');
+xlim([-B/1e6*1.5, B/1e6*1.5]); ylim([-100, 5]); grid on;
 
-% 对数
-figure(5);
-plot(t_corr, auto_corr_no_comp_db, 'r--', 'LineWidth', 1.5); hold on;
-plot(t_corr, auto_corr_with_comp_db, 'b-', 'LineWidth', 1.5);
-xlabel('Time Delay (μs)'); ylabel('Amplitude (dB)');
-legend(  'S_{out}(f)', 'S_{tx}(f)', 'Location', 'best');
-grid on;
-ylim([-120, 0]);
+%% 步骤6: 命令行输出指标表
+fprintf('\n%-35s %-12s %-22s %-12s\n', 'Method', 'PSLR (dB)', '3-dB Mainlobe Width', 'PAPR (dB)');
+fprintf('%s\n', repmat('-', 1, 86));
+fprintf('%-35s %-12.3f %-22d %-12.3f\n', 'Ideal LFM', PSLR_ideal, mainlobe_width_ideal, PAPR_ideal);
+fprintf('%-35s %-12.3f %-22d %-12.3f\n', 'Distorted output', PSLR_no_comp, mainlobe_width_no_comp, PAPR_no_comp);
+fprintf('%-35s %-12.3f %-22d %-12.3f\n', 'Hamming window', PSLR_hamming, mainlobe_width_hamming, PAPR_hamming);
+fprintf('%-35s %-12.3f %-22d %-12.3f\n', 'Optimized generalized cosine window', PSLR_opt, mainlobe_width_opt, PAPR_opt);
+fprintf('Optimized [a0, a1, a2] = [%.4f, %.4f, %.4f]\n', best_coeff(1), best_coeff(2), best_coeff(3));
 
-figure(6);
-plot(t*1e6, real(s_ideal), 'k-', 'LineWidth', 1.5); hold on;
-plot(t*1e6, real(s_with_H), 'r--', 'LineWidth', 1.5);
-xlabel('Time (μs)'); ylabel('Amplitude');
-legend('LFM', 'S_{out}(f)', 'Location', 'best');
-grid on;
+%% ===== local functions =====
+function best_coeff = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2, fa_opt)
+pop_size = fa_opt.pop_size;
+max_iter = fa_opt.max_iter;
+beta0 = fa_opt.beta0;
+gamma = fa_opt.gamma;
+alpha = fa_opt.alpha;
 
-figure(7);
-plot(freq/1e6, 20*log10(S_ideal_mag/max(S_ideal_mag)), 'k-', 'LineWidth', 1.5); hold on;
-plot(freq/1e6, 20*log10(S_no_comp_mag/max(S_no_comp_mag)), 'r--', 'LineWidth', 1.5);
-xlim([-B/1e6*1.5, B/1e6*1.5]);ylim([-50, 0]);
-xlabel('Frequency (MHz)'); ylabel('Amplitude (dB)');
-legend('LFM', 'S_{out}(f)', 'Location', 'best');
-grid on;
+pop = rand(pop_size, 3);
+for i = 1:pop_size
+    pop(i, :) = project_coeffs(pop(i, :));
+end
 
-figure(8);
-plot(t_corr(range_idx), abs(auto_corr_ideal(range_idx)), 'k-', 'LineWidth', 1.5); hold on;
-plot(t_corr(range_idx), abs(auto_corr_no_comp(range_idx)), 'r--', 'LineWidth', 1.5);
-plot(t_corr(range_idx), abs(auto_corr_with_comp(range_idx)), 'b-.', 'LineWidth', 1.5);
-xlabel('Time Delay(μs)'); ylabel('Normalized Amplitude');
-legend('LFM', 'S_{out}(t)', 'S_{tx}(t)', 'Location', 'best');
-grid on;
+J = zeros(pop_size, 1);
+for i = 1:pop_size
+    J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2);
+end
 
-figure(9);
-plot(freq/1e6, unwrap(angle(fftshift(fft(s_ideal_padded, N_fft)))), 'k-', 'LineWidth', 1.5); hold on;
-plot(freq/1e6, unwrap(angle(fftshift(fft(s_with_H_padded, N_fft)))), 'r--', 'LineWidth', 1.5);
-plot(freq/1e6, unwrap(angle(fftshift(fft(s_tx_with_H_padded, N_fft)))), 'b-.', 'LineWidth', 1.5);
-xlim([-B/1e6*1.5, B/1e6*1.5]);
-xlabel('Frequency (MHz)'); ylabel('Phase (rad)');
-legend('LFM', 'S_{out}(f)','S_{tx}(f)', 'Location', 'best');
-grid on;
+for iter = 1:max_iter
+    for i = 1:pop_size
+        for j = 1:pop_size
+            if J(j) < J(i)
+                r2 = sum((pop(i, :) - pop(j, :)).^2);
+                beta = beta0 * exp(-gamma * r2);
+                step = beta * (pop(j, :) - pop(i, :)) + alpha * (rand(1, 3) - 0.5);
+                pop(i, :) = project_coeffs(pop(i, :) + step);
+                J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2);
+            end
+        end
+    end
+end
 
-figure(10);
-plot(freq/1e6, unwrap(angle(fftshift(fft(s_lfm_padded, N_fft)))), 'k-', 'LineWidth', 1.5); hold on;
-plot(freq/1e6, unwrap(angle(fftshift(fft(s_with_H_padded, N_fft)))), 'r--', 'LineWidth', 1.5);
-xlim([-B/1e6*1.5, B/1e6*1.5]);
-xlabel('Frequency (MHz)'); ylabel('Phase (rad)');
-legend('LFM', 'S_{out}(f)', 'Location', 'best');
-grid on;
+[~, best_idx] = min(J);
+best_coeff = pop(best_idx, :);
+end
+
+function J = evaluate_window_objective(coeff, G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, mlw_ham, papr_ham, lambda1, lambda2)
+L = length(f_idx);
+win_local = build_generalized_cosine_window(L, coeff);
+win = zeros(N_fft, 1);
+win(f_idx) = win_local;
+W_k = fftshift(win);
+
+S_tx_k = S_LFM_k .* (G_tx_k .* W_k);
+s_tx_time = ifft(S_tx_k, N_fft);
+S_tx_full = fft(s_tx_time, N_fft);
+S_tx_with_H = S_tx_full .* H_k;
+s_out_time = ifft(S_tx_with_H, N_fft);
+s_out = s_out_time(1:N_pulse);
+s_out = s_out / sqrt(sum(abs(s_out).^2));
+
+auto_corr = xcorr(s_out, s_out);
+auto_corr = auto_corr / max(abs(auto_corr));
+
+pslr_linear = compute_pslr(auto_corr);
+mainlobe_width = compute_mainlobe_width(auto_corr);
+papr_db = compute_papr(s_out);
+
+J = pslr_linear ...
+    + lambda1 * max(0, mainlobe_width - mlw_ham)^2 ...
+    + lambda2 * max(0, papr_db - papr_ham)^2;
+end
+
+function w = build_generalized_cosine_window(L, coeff)
+n = (0:L-1)';
+a0 = coeff(1); a1 = coeff(2); a2 = coeff(3);
+if L == 1
+    w = 1;
+else
+    w = a0 - a1*cos(2*pi*n/(L-1)) + a2*cos(4*pi*n/(L-1));
+end
+w(w < 0) = 0;
+if max(w) > 0
+    w = w / max(w);
+end
+end
+
+function coeff = project_coeffs(coeff)
+coeff = max(0, min(1, coeff));
+s = sum(coeff);
+if s <= eps
+    coeff = [1, 0, 0];
+else
+    coeff = coeff / s;
+end
+end
+
+function pslr_linear = compute_pslr(auto_corr_norm)
+a = abs(auto_corr_norm(:));
+[peak_val, peak_idx] = max(a);
+a(max(1, peak_idx-1):min(length(a), peak_idx+1)) = 0;
+max_sidelobe = max(a);
+pslr_linear = max_sidelobe / max(peak_val, eps);
+end
+
+function width = compute_mainlobe_width(auto_corr_norm)
+a = abs(auto_corr_norm(:));
+[peak_val, peak_idx] = max(a);
+th = peak_val / sqrt(2);
+left = peak_idx;
+while left > 1 && a(left-1) >= th
+    left = left - 1;
+end
+right = peak_idx;
+while right < length(a) && a(right+1) >= th
+    right = right + 1;
+end
+width = right - left + 1;
+end
+
+function papr_db = compute_papr(x)
+p = abs(x).^2;
+papr_db = 10 * log10(max(p) / mean(p));
+end
