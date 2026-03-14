@@ -243,7 +243,7 @@ PAPR_windows = zeros(num_windows, 1);
 
 for i = 1:num_windows
     % 生成传统窗（频域带宽固定为 B）
-    f_idx_win = find(abs(freq) <= B/2);
+    f_idx_win = find(abs(freq) <= B);
     win_full = zeros(N_fft, 1);
 
     switch window_names{i}
