@@ -93,6 +93,9 @@ for i = 1:num_cases
     S_tx_with_H = S_tx_full .* H_k;
     s_tx_with_H_time = ifft(S_tx_with_H, N_fft);
 
+    % 保存发射时域信号（用于按 figure(7) 方法计算频谱）
+    s_tx_case_all(:, i) = s_tx_time(1:N_pulse);
+
     % 截取并归一化
     s_case = s_tx_with_H_time(1:N_pulse);
     s_case = s_case / sqrt(sum(abs(s_case).^2) + eps);
