@@ -70,7 +70,7 @@ MLW_vec  = zeros(num_cases,1);   % 主瓣宽度(3dB), us
 t_corr = (-N_pulse+1:N_pulse-1) / fs * 1e6;  % 微秒
 auto_corr_db_all = zeros(length(t_corr), num_cases);
 auto_corr_abs_all = zeros(length(t_corr), num_cases);
-spec_tx_db_all = zeros(N_fft, num_cases);
+spec_tx_mag_all = zeros(N_fft, num_cases);
 
 for i = 1:num_cases
     wf = width_factors(i);
@@ -94,9 +94,8 @@ for i = 1:num_cases
     S_tx_with_H = S_tx_full .* H_k;
     s_tx_with_H_time = ifft(S_tx_with_H, N_fft);
 
-    % 频谱（dB）
-    spec_tx_shift = fftshift(S_tx_full);
-    spec_tx_db_all(:, i) = 20*log10(abs(spec_tx_shift) / (max(abs(spec_tx_shift)) + eps) + 1e-10);
+    % 频谱幅度（按 figure(7) 方式在绘图时归一化转dB）
+    spec_tx_mag_all(:, i) = fftshift(abs(S_tx_full));
 
     % 截取并归一化
     s_case = s_tx_with_H_time(1:N_pulse);
@@ -180,10 +179,10 @@ ylim([-120, 0]);
 
 % figure(7) 代码样式：发射频谱对比
 figure(4);
-plot(freq/1e6, spec_tx_db_all(:,1), 'k-', 'LineWidth', 1.5); hold on;
-plot(freq/1e6, spec_tx_db_all(:,2), 'r--', 'LineWidth', 1.5);
-plot(freq/1e6, spec_tx_db_all(:,3), 'b-.', 'LineWidth', 1.5);
-plot(freq/1e6, spec_tx_db_all(:,4), 'm:', 'LineWidth', 1.5);
+plot(freq/1e6, 20*log10(spec_tx_mag_all(:,1)/(max(spec_tx_mag_all(:,1)) + eps) + 1e-10), 'k-', 'LineWidth', 1.5); hold on;
+plot(freq/1e6, 20*log10(spec_tx_mag_all(:,2)/(max(spec_tx_mag_all(:,2)) + eps) + 1e-10), 'r--', 'LineWidth', 1.5);
+plot(freq/1e6, 20*log10(spec_tx_mag_all(:,3)/(max(spec_tx_mag_all(:,3)) + eps) + 1e-10), 'b-.', 'LineWidth', 1.5);
+plot(freq/1e6, 20*log10(spec_tx_mag_all(:,4)/(max(spec_tx_mag_all(:,4)) + eps) + 1e-10), 'm:', 'LineWidth', 1.5);
 xlim([-B/1e6*1.5, B/1e6*1.5]); ylim([-50, 0]);
 xlabel('Frequency (MHz)'); ylabel('Amplitude (dB)');
 legend(legend_labels{:}, 'Location', 'best');
