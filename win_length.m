@@ -143,7 +143,6 @@ plot(width_factors, MLW_vec, '^-m', 'LineWidth', 1.5, 'MarkerSize', 7);
 ylabel('PAPR (dB) / main-lobe width (\mus)');
 
 xlabel('window width');
-title('Sensitivity Analysis vs Window Width');
 legend('PSLR', 'ISLR', 'PAPR', 'main-lobe width', 'Location', 'best');
 grid on;
 
