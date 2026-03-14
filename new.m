@@ -110,13 +110,13 @@ PAPR_hamming = compute_papr(s_tx_hamming_with_H);
 
 %% NEW: 优化广义余弦窗设计
 %% NEW: 萤火虫算法优化
-rng(1);
+rng(20);
 lambda1 = 10;
-lambda2 = 1;
-fa_opt.pop_size = 20;
-fa_opt.max_iter = 30;
+lambda2 = 30;
+fa_opt.pop_size = 30;
+fa_opt.max_iter = 50;
 fa_opt.beta0 = 1;
-fa_opt.gamma = 1;
+fa_opt.gamma = 2;
 fa_opt.alpha = 0.2;
 fa_opt.verbose = true;
 
@@ -463,7 +463,7 @@ mainlobe_width = compute_3db_width_corrected(auto_corr, peak_idx, fs, B);
 papr_db = compute_papr(s_out);
 
 % NEW: 在J函数中使用dB量的PSLR与ISLR
-J = pslr_db + islr_db ...
+J = 1 *pslr_db + 1 *islr_db ...
     + lambda1 * max(0, mainlobe_width - mlw_ham)^2 ...
     + lambda2 * max(0, papr_db - papr_ham)^2;
 
