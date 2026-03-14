@@ -122,7 +122,7 @@ PAPR_hamming = compute_papr(s_tx_hamming_with_H);
 %% NEW: 萤火虫算法优化
 rng(1);
 lambda1 = 10;
-lambda2 = 1;
+lambda2 = 10;
 fa_opt.pop_size = 20;
 fa_opt.max_iter = 30;
 fa_opt.beta0 = 1;
