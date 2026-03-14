@@ -108,7 +108,7 @@ for i = 1:num_cases
     PSLR_vec(i) = compute_pslr_corrected(auto_corr, center_idx, fs, B);
     ISLR_vec(i) = compute_islr_corrected(auto_corr, center_idx, fs, B);
     MLW_vec(i)  = compute_3db_width_corrected(auto_corr, center_idx, fs, B);
-    PAPR_vec(i) = 10*log10(max(abs(s_case).^2) / (mean(abs(s_case).^2) + eps));
+    PAPR_vec(i) = compute_papr(s_case);
 end
 
 %% 步骤4: 输出结果
@@ -147,7 +147,7 @@ title('Sensitivity Analysis vs Window Width');
 legend('PSLR', 'ISLR', 'PAPR', 'main-lobe width', 'Location', 'best');
 grid on;
 
-%% 辅助函数
+%% 修正后的辅助函数
 function pslr = compute_pslr_corrected(corr_signal, peak_idx, fs, B)
     % 主瓣宽度估计（样点）
     mainlobe_width_samples = ceil(2 * fs / B);
@@ -176,22 +176,28 @@ function pslr = compute_pslr_corrected(corr_signal, peak_idx, fs, B)
 end
 
 function islr = compute_islr_corrected(corr_signal, peak_idx, fs, B)
-    % 主瓣宽度估计（样点）
-    mainlobe_width_samples = ceil(2 * fs / B);
-
+    % 修正的积分旁瓣比计算函数
+    % 主瓣宽度 ≈ 1/B，转换为采样点数
+    mainlobe_width_samples = ceil(2 * fs / B);  % 取2倍作为安全余量
+    
+    % 确保边界有效
     mainlobe_start = max(1, peak_idx - mainlobe_width_samples);
     mainlobe_end = min(length(corr_signal), peak_idx + mainlobe_width_samples);
-
+    
+    % 主瓣能量
     mainlobe_energy = sum(abs(corr_signal(mainlobe_start:mainlobe_end)).^2);
-
-    mask = true(length(corr_signal), 1);
-    mask(mainlobe_start:mainlobe_end) = false;
-    sidelobe_energy = sum(abs(corr_signal(mask)).^2);
-
-    if mainlobe_energy > 0
-        islr = 10*log10(sidelobe_energy / mainlobe_energy + eps);
+    
+    % 总能量
+    total_energy = sum(abs(corr_signal).^2);
+    
+    % 旁瓣能量 = 总能量 - 主瓣能量
+    sidelobe_energy = total_energy - mainlobe_energy;
+    
+    % 计算ISLR（dB）
+    if mainlobe_energy > 0 && sidelobe_energy > 0
+        islr = 10*log10(sidelobe_energy / mainlobe_energy);
     else
-        islr = inf;
+        islr = -inf;
     end
 end
 
@@ -221,4 +227,9 @@ function bw_3db = compute_3db_width_corrected(corr_signal, peak_idx, fs, B)
     if bw_3db < 0.01
         bw_3db = 0.886 / B * 1e6;
     end
+end
+
+function papr_db = compute_papr(x)
+p = abs(x).^2;
+papr_db = 10 * log10(max(p) / mean(p));
 end
