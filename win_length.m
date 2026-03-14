@@ -177,30 +177,15 @@ legend(legend_labels, 'Location', 'best');
 grid on;
 ylim([-120, 0]);
 
-% figure(4): 不同窗宽下信号频谱对比（按补零->FFT->归一化dB方法）
+% figure(4): 不同窗宽下信号频谱对比（参考原 figure(3) 画法）
 figure(4);
-
-s_tx_case_1_padded = zeros(N_fft, 1);
-s_tx_case_1_padded(1:N_pulse) = s_tx_case_all(:,1);
-S_tx_case_1_mag = fftshift(abs(fft(s_tx_case_1_padded, N_fft)));
-
-s_tx_case_2_padded = zeros(N_fft, 1);
-s_tx_case_2_padded(1:N_pulse) = s_tx_case_all(:,2);
-S_tx_case_2_mag = fftshift(abs(fft(s_tx_case_2_padded, N_fft)));
-
-s_tx_case_3_padded = zeros(N_fft, 1);
-s_tx_case_3_padded(1:N_pulse) = s_tx_case_all(:,3);
-S_tx_case_3_mag = fftshift(abs(fft(s_tx_case_3_padded, N_fft)));
-
-s_tx_case_4_padded = zeros(N_fft, 1);
-s_tx_case_4_padded(1:N_pulse) = s_tx_case_all(:,4);
-S_tx_case_4_mag = fftshift(abs(fft(s_tx_case_4_padded, N_fft)));
-
-plot(freq/1e6, 20*log10(S_tx_case_1_mag/max(S_tx_case_1_mag) + 1e-10), 'k-', 'LineWidth', 1.5); hold on;
-plot(freq/1e6, 20*log10(S_tx_case_2_mag/max(S_tx_case_2_mag) + 1e-10), 'r--', 'LineWidth', 1.5);
-plot(freq/1e6, 20*log10(S_tx_case_3_mag/max(S_tx_case_3_mag) + 1e-10), 'b-.', 'LineWidth', 1.5);
-plot(freq/1e6, 20*log10(S_tx_case_4_mag/max(S_tx_case_4_mag) + 1e-10), 'm:', 'LineWidth', 1.5);
-xlim([-B/1e6*1.5, B/1e6*1.5]); ylim([-100, 5]);
+line_styles = {'k-', 'r--', 'b-.', 'm:'};
+for i = 1:num_cases
+    s_case_padded = zeros(N_fft, 1);
+    s_case_padded(1:N_pulse) = s_tx_case_all(:, i);
+    S_case_mag = fftshift(abs(fft(s_case_padded, N_fft)));
+    plot(freq/1e6, 20*log10(S_case_mag / max(S_case_mag)), line_styles{i}, 'LineWidth', 1.5); hold on;
+end
 xlabel('Frequency (MHz)'); ylabel('Amplitude (dB)');
 legend(legend_labels{:}, 'Location', 'best');
 grid on;
