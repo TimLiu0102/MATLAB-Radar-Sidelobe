@@ -18,6 +18,13 @@ freq = (-N_fft/2:N_fft/2-1) * (fs/N_fft);  % 频率轴
 alpha_reg = 1e-2;       % 正则化因子系数（增大了）
 A_max = 4.0;            % 最大增益限制（适当增大）
 
+% 鲁棒优化参数（按给定思路：多场景均值 + 最坏场景项）
+K_robust = 20;          % 扰动场景数（推荐10或20）
+mu_robust = 0.3;        % 最坏场景权重
+delta_a = 0.05;         % 幅度扰动上界（±5%）
+delta_phi_deg = 5;      % 相位扰动上界（度）
+delta_phi = delta_phi_deg*pi/180;
+
 % 显示参数
 f_center_idx = find(abs(freq)<=B/2);
 
@@ -37,6 +44,9 @@ H_phase(f_center_idx) = 0.4*pi*(freq(f_center_idx)/B).^3 + ...
 % 组合成复数频率响应
 H_k = H_mag .* exp(1j*H_phase);
 H_k = fftshift(H_k);  % 转换为MATLAB的FFT顺序
+
+% 构造鲁棒优化场景集合 Ω={H^(1),...,H^(K)}
+H_scenarios = build_perturbed_channels(H_k, f_center_idx, K_robust, delta_a, delta_phi);
 
 %% 步骤1: 生成理想LFM信号及其频谱
 % 生成时域LFM信号
@@ -121,9 +131,9 @@ fa_opt.alpha = 0.2;
 fa_opt.verbose = true;
 
 best_param = optimize_generalized_cosine_fa(...
-    G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, ...
+    G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, ...
     mainlobe_width_hamming, PAPR_hamming, ...
-    lambda1, lambda2, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B);
+    lambda1, lambda2, mu_robust, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B);
 
 best_coeff = best_param(1:3);
 best_width_B_multiple = best_param(4);
@@ -220,93 +230,6 @@ xlabel('Frequency (MHz)'); ylabel('Magnitude (dB)');
 legend('Ideal LFM', 'Distorted output', 'Hamming window', 'Optimized generalized cosine', 'Location', 'best');
 xlim([-B/1e6*1.5, B/1e6*1.5]); ylim([-100, 5]); grid on;
 
-% 图4：论文风格四联图（适配当前脚本变量）
-figure(4);
-set(gcf, 'Position', [120, 120, 2200, 360]);
-tiledlayout(1,4,'Padding','compact','TileSpacing','compact');
-
-Nfft_plot = 8192;
-Nw = L;
-
-% 构造对比窗（与opt窗同长度）
-W_hamming = hamming_win_local(:);
-W_kaiser = kaiser(Nw, 6).';
-if exist('taylorwin', 'file')
-    W_taylor = taylorwin(Nw, 4, -35).';
-else
-    % 兼容环境：若无taylorwin，退化为Kaiser近似
-    W_taylor = kaiser(Nw, 5).';
-end
-W_cheb = chebwin(Nw, 80).';
-W_opt = opt_gc_local(:).';
-
-win_list = {W_hamming, W_kaiser, W_taylor, W_cheb, W_opt};
-labels = {'Hamming','Kaiser','Taylor','Chebyshev','Proposed'};
-styles = {'r--','b-.','m:','c--','g-'};
-widths = [1.0, 1.0, 1.2, 1.0, 1.5];
-
-% (a) 窗函数频率响应
-nexttile;
-f_norm = (0:Nfft_plot-1)'/Nfft_plot;
-for ii = 1:numel(win_list)
-    Hi = abs(fft(win_list{ii}, Nfft_plot));
-    plot(f_norm, 20*log10(Hi/(max(Hi)+eps)+eps), styles{ii}, 'LineWidth', widths(ii)); hold on;
-end
-xlabel('Normalized Frequency (\times\pi rad/sample)');
-ylabel('Magnitude (dB)');
-legend(labels, 'Location','best');
-grid on; xlim([0 0.2]); ylim([-160 5]);
-text(0.5, -0.26, '(a)', 'Units', 'normalized', 'FontWeight', 'bold', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
-
-% (b) 时域窗形
-nexttile;
-n = (0:Nw-1)';
-for ii = 1:numel(win_list)
-    wi = abs(win_list{ii}(:));
-    plot(n, wi/(max(wi)+eps), styles{ii}, 'LineWidth', widths(ii)); hold on;
-end
-xlabel('Samples'); ylabel('Normalized Amplitude');
-legend(labels, 'Location','best');
-grid on; xlim([0 Nw-1]);
-text(0.5, -0.26, '(b)', 'Units', 'normalized', 'FontWeight', 'bold', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
-
-% (c) 低通 FIR 响应（窗法）
-nexttile;
-M_fir = max(32, 2*floor(Nw/4));
-wc = 0.25;  % 归一化截止频率（相对Nyquist）
-if mod(M_fir,2) ~= 0
-    M_fir = M_fir + 1;
-end
-h_ideal = fir1(M_fir, wc, 'low', rectwin(M_fir+1));
-H_fir = cell(numel(win_list),1);
-w_fir = cell(numel(win_list),1);
-for ii = 1:numel(win_list)
-    wi_src = abs(win_list{ii}(:));
-    wi = interp1(1:numel(wi_src), wi_src, linspace(1, numel(wi_src), M_fir+1), 'linear', 'extrap');
-    wi = wi(:)/(max(wi)+eps);
-    bi = h_ideal(:) .* wi(:);
-    [H_fir{ii}, w_fir{ii}] = freqz(bi, 1, Nfft_plot);
-    plot(w_fir{ii}/pi, 20*log10(abs(H_fir{ii})+eps), styles{ii}, 'LineWidth', widths(ii)); hold on;
-end
-xlabel('Normalized Frequency (\times\pi rad/sample)');
-ylabel('Magnitude response (dB)');
-legend(labels, 'Location','best');
-grid on; xlim([0 1]); ylim([-150 5]);
-text(0.5, -0.26, '(c)', 'Units', 'normalized', 'FontWeight', 'bold', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
-
-% (d) FIR 幅度误差（相对理想低通）
-nexttile;
-Hd = double(w_fir{1} <= wc*pi);
-for ii = 1:numel(win_list)
-    err_i = abs(abs(H_fir{ii}) - Hd);
-    semilogy(w_fir{ii}/pi, err_i + eps, styles{ii}, 'LineWidth', widths(ii)); hold on;
-end
-xlabel('Normalized Frequency (\times\pi rad/sample)');
-ylabel('Amplitude error');
-legend(labels, 'Location','best');
-grid on; xlim([0 1]);
-text(0.5, -0.26, '(d)', 'Units', 'normalized', 'FontWeight', 'bold', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
-
 %% 步骤6: 命令行输出指标表
 fprintf('\n%-35s %-12s %-12s %-22s %-12s\n', 'Method', 'PSLR (dB)', 'ISLR (dB)', '3-dB Mainlobe Width (us)', 'PAPR (dB)');
 fprintf('%s\n', repmat('-', 1, 102));
@@ -315,80 +238,10 @@ fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Distorted output', PSLR_no_c
 fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Hamming window', PSLR_hamming, ISLR_hamming, mainlobe_width_hamming, PAPR_hamming);
 fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Optimized generalized cosine window', PSLR_opt, ISLR_opt, mainlobe_width_opt, PAPR_opt);
 fprintf('Optimized [a0, a1, a2] = [%.4f, %.4f, %.4f], window width = %.4f * B\n', best_coeff(1), best_coeff(2), best_coeff(3), best_width_B_multiple);
-
-%% 步骤7: 随机种子1~50重复优化统计（不影响原有单次绘图）
-num_trials = 50;
-seed_list = 1:num_trials;
-best_params_runs = zeros(num_trials, 4);
-PSLR_runs = zeros(num_trials, 1);
-ISLR_runs = zeros(num_trials, 1);
-mainlobe_runs = zeros(num_trials, 1);
-PAPR_runs = zeros(num_trials, 1);
-
-fa_opt_mc = fa_opt;
-fa_opt_mc.verbose = false;  % Monte Carlo阶段关闭迭代日志，避免刷屏
-
-for trial_idx = 1:num_trials
-    rng(seed_list(trial_idx));
-    best_param_trial = optimize_generalized_cosine_fa(...
-        G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, ...
-        mainlobe_width_hamming, PAPR_hamming, ...
-        lambda1, lambda2, min_width_B_multiple, max_width_B_multiple, fa_opt_mc, fs, B);
-
-    best_params_runs(trial_idx, :) = best_param_trial;
-
-    coeff_trial = best_param_trial(1:3);
-    width_trial = best_param_trial(4);
-    win_trial_local = build_generalized_cosine_window(L, f_local, coeff_trial, width_trial, B);
-    win_trial = zeros(N_fft, 1);
-    win_trial(f_idx) = win_trial_local;
-    W_trial_k = fftshift(win_trial);
-
-    S_tx_trial_k = S_LFM_k .* (G_tx_k .* W_trial_k);
-    s_tx_trial_time = ifft(S_tx_trial_k, N_fft);
-    S_tx_trial_full = fft(s_tx_trial_time, N_fft);
-    S_tx_trial_with_H = S_tx_trial_full .* H_k;
-    s_tx_trial_with_H_time = ifft(S_tx_trial_with_H, N_fft);
-    s_tx_trial_with_H = s_tx_trial_with_H_time(1:N_pulse);
-    s_tx_trial_with_H = s_tx_trial_with_H / sqrt(sum(abs(s_tx_trial_with_H).^2));
-
-    auto_corr_trial = xcorr(s_tx_trial_with_H, s_tx_trial_with_H);
-    auto_corr_trial = auto_corr_trial / max(abs(auto_corr_trial));
-    peak_idx_trial = ceil(length(auto_corr_trial)/2);
-
-    PSLR_runs(trial_idx) = compute_pslr_corrected(auto_corr_trial, peak_idx_trial, fs, B);
-    ISLR_runs(trial_idx) = compute_islr_corrected(auto_corr_trial, peak_idx_trial, fs, B);
-    mainlobe_runs(trial_idx) = compute_3db_width_corrected(auto_corr_trial, peak_idx_trial, fs, B);
-    PAPR_runs(trial_idx) = compute_papr(s_tx_trial_with_H);
-end
-
-% 统计量
-stats_names = {'PSLR (dB)', 'ISLR (dB)', '3-dB Mainlobe Width (us)', 'PAPR (dB)'};
-stats_mat = [PSLR_runs, ISLR_runs, mainlobe_runs, PAPR_runs];
-mean_vals = mean(stats_mat, 1);
-std_vals = std(stats_mat, 0, 1);
-best_vals = min(stats_mat, [], 1);
-worst_vals = max(stats_mat, [], 1);
-
-fprintf('\n%-28s %-12s %-12s %-12s %-12s\n', 'Metric (50 random seeds)', 'Mean', 'Std', 'Best', 'Worst');
-fprintf('%s\n', repmat('-', 1, 82));
-for k = 1:numel(stats_names)
-    fprintf('%-28s %-12.4f %-12.4f %-12.4f %-12.4f\n', ...
-        stats_names{k}, mean_vals(k), std_vals(k), best_vals(k), worst_vals(k));
-end
-
-% 可视化：箱线图（直观看50次分布）
-figure(5);
-set(gcf, 'Position', [180, 120, 1000, 520]);
-tiledlayout(2,2,'Padding','compact','TileSpacing','compact');
-
-nexttile; boxplot(PSLR_runs); title('PSLR (dB)'); grid on;
-nexttile; boxplot(ISLR_runs); title('ISLR (dB)'); grid on;
-nexttile; boxplot(mainlobe_runs); title('3-dB Mainlobe Width (us)'); grid on;
-nexttile; boxplot(PAPR_runs); title('PAPR (dB)'); grid on;
+fprintf('Robust settings: K=%d, mu=%.3f, delta_a=%.3f, delta_phi=%.2f deg\n', K_robust, mu_robust, delta_a, delta_phi_deg);
 
 %% ===== local functions =====
-function best_param = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B)
+function best_param = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, mu_robust, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B)
 pop_size = fa_opt.pop_size;
 max_iter = fa_opt.max_iter;
 beta0 = fa_opt.beta0;
@@ -408,7 +261,7 @@ end
 
 J = zeros(pop_size, 1);
 for i = 1:pop_size
-    J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, fs, B);
+    J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, mu_robust, fs, B);
 end
 
 for iter = 1:max_iter
@@ -419,16 +272,16 @@ for iter = 1:max_iter
                 beta = beta0 * exp(-gamma * r2);
                 step = beta * (pop(j, :) - pop(i, :)) + alpha * ([rand(1, 3)-0.5, rand-0.5]);
                 pop(i, :) = project_coeffs(pop(i, :) + step, min_width_B_multiple, max_width_B_multiple);
-                J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, fs, B);
+                J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, mu_robust, fs, B);
             end
         end
     end
 
     [best_J, best_idx_iter] = min(J);
     if verbose
-        [~, metrics] = evaluate_window_objective(pop(best_idx_iter, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, fs, B);
-        fprintf('FA iter %02d/%02d | J=%.4f | PSLR=%.3f dB | ISLR=%.3f dB | Mainlobe=%.4f us | PAPR=%.3f dB | Width=%.3f*B\n', ...
-            iter, max_iter, best_J, metrics.pslr_db, metrics.islr_db, metrics.mainlobe_width, metrics.papr_db, pop(best_idx_iter, 4));
+        [~, metrics] = evaluate_window_objective(pop(best_idx_iter, :), G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, mu_robust, fs, B);
+        fprintf('FA iter %02d/%02d | J=%.4f (mean %.4f + mu*max %.4f) | PSLR=%.3f dB | ISLR=%.3f dB | Mainlobe=%.4f us | PAPR=%.3f dB | Width=%.3f*B\n', ...
+            iter, max_iter, best_J, metrics.mean_J, metrics.max_J, metrics.pslr_db, metrics.islr_db, metrics.mainlobe_width, metrics.papr_db, pop(best_idx_iter, 4));
     end
 end
 
@@ -436,7 +289,7 @@ end
 best_param = pop(best_idx, :);
 end
 
-function [J, metrics] = evaluate_window_objective(param, G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, fs, B)
+function [J, metrics] = evaluate_window_objective(param, G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, mu_robust, fs, B)
 L = length(f_idx);
 coeff = param(1:3);
 width_B_multiple = param(4);
@@ -445,30 +298,47 @@ win = zeros(N_fft, 1);
 win(f_idx) = win_local;
 W_k = fftshift(win);
 
-S_tx_k = S_LFM_k .* (G_tx_k .* W_k);
-s_tx_time = ifft(S_tx_k, N_fft);
-S_tx_full = fft(s_tx_time, N_fft);
-S_tx_with_H = S_tx_full .* H_k;
-s_out_time = ifft(S_tx_with_H, N_fft);
-s_out = s_out_time(1:N_pulse);
-s_out = s_out / sqrt(sum(abs(s_out).^2));
+K = size(H_scenarios, 2);
+J_list = zeros(K,1);
+metric_list = zeros(K,4); % [pslr, islr, mainlobe, papr]
 
-auto_corr = xcorr(s_out, s_out);
-auto_corr = auto_corr / max(abs(auto_corr));
+for k = 1:K
+    H_k = H_scenarios(:, k);
+    S_tx_k = S_LFM_k .* (G_tx_k .* W_k);
+    s_tx_time = ifft(S_tx_k, N_fft);
+    S_tx_full = fft(s_tx_time, N_fft);
+    S_tx_with_H = S_tx_full .* H_k;
+    s_out_time = ifft(S_tx_with_H, N_fft);
+    s_out = s_out_time(1:N_pulse);
+    s_out = s_out / sqrt(sum(abs(s_out).^2));
 
-peak_idx = ceil(length(auto_corr)/2);
-pslr_db = compute_pslr_corrected(auto_corr, peak_idx, fs, B);
-islr_db = compute_islr_corrected(auto_corr, peak_idx, fs, B);
-mainlobe_width = compute_3db_width_corrected(auto_corr, peak_idx, fs, B);
-papr_db = compute_papr(s_out);
+    auto_corr = xcorr(s_out, s_out);
+    auto_corr = auto_corr / max(abs(auto_corr));
 
-% NEW: 在J函数中使用dB量的PSLR与ISLR
-J = pslr_db + islr_db ...
-    + lambda1 * max(0, mainlobe_width - mlw_ham)^2 ...
-    + lambda2 * max(0, papr_db - papr_ham)^2;
+    peak_idx = ceil(length(auto_corr)/2);
+    pslr_db = compute_pslr_corrected(auto_corr, peak_idx, fs, B);
+    islr_db = compute_islr_corrected(auto_corr, peak_idx, fs, B);
+    mainlobe_width = compute_3db_width_corrected(auto_corr, peak_idx, fs, B);
+    papr_db = compute_papr(s_out);
 
-metrics = struct('pslr_db', pslr_db, 'islr_db', islr_db, ...
-                 'mainlobe_width', mainlobe_width, 'papr_db', papr_db);
+    J_k = pslr_db + islr_db ...
+        + lambda1 * max(0, mainlobe_width - mlw_ham)^2 ...
+        + lambda2 * max(0, papr_db - papr_ham)^2;
+
+    J_list(k) = J_k;
+    metric_list(k, :) = [pslr_db, islr_db, mainlobe_width, papr_db];
+end
+
+mean_J = mean(J_list);
+max_J = max(J_list);
+J = mean_J + mu_robust * max_J;
+
+[~, best_case_idx] = max(J_list);
+metrics = struct('pslr_db', metric_list(best_case_idx,1), ...
+                 'islr_db', metric_list(best_case_idx,2), ...
+                 'mainlobe_width', metric_list(best_case_idx,3), ...
+                 'papr_db', metric_list(best_case_idx,4), ...
+                 'mean_J', mean_J, 'max_J', max_J);
 end
 
 function w = build_generalized_cosine_window(L, f_local, coeff, width_B_multiple, B)
@@ -511,6 +381,21 @@ end
 
 width_B_multiple = max(min_width_B_multiple, min(max_width_B_multiple, width_B_multiple));
 param = [coeff, width_B_multiple];
+end
+
+
+function H_scenarios = build_perturbed_channels(H_nominal, inband_idx, K, delta_a, delta_phi)
+N = numel(H_nominal);
+H_scenarios = repmat(H_nominal, 1, K);
+
+for k = 1:K
+    eps_a = zeros(N,1);
+    eps_phi = zeros(N,1);
+    eps_a(inband_idx) = -delta_a + 2*delta_a*rand(numel(inband_idx),1);
+    eps_phi(inband_idx) = -delta_phi + 2*delta_phi*rand(numel(inband_idx),1);
+
+    H_scenarios(:,k) = H_nominal .* (1 + eps_a) .* exp(1j*eps_phi);
+end
 end
 
 %% 修正后的辅助函数
