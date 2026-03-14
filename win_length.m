@@ -69,6 +69,7 @@ MLW_vec  = zeros(num_cases,1);   % 主瓣宽度(3dB), us
 % 用于可视化
 t_corr = (-N_pulse+1:N_pulse-1) / fs * 1e6;  % 微秒
 auto_corr_db_all = zeros(length(t_corr), num_cases);
+auto_corr_abs_all = zeros(length(t_corr), num_cases);
 
 for i = 1:num_cases
     wf = width_factors(i);
@@ -99,6 +100,7 @@ for i = 1:num_cases
     % 自相关
     auto_corr = xcorr(s_case, s_case);
     auto_corr = auto_corr / (max(abs(auto_corr)) + eps);
+    auto_corr_abs_all(:, i) = abs(auto_corr);
     auto_corr_db = 20*log10(abs(auto_corr) + 1e-10);
     auto_corr_db_all(:, i) = auto_corr_db;
 
@@ -158,6 +160,8 @@ for i = 1:num_alpha
 end
 
 %% 步骤5: 绘图
+legend_labels = arrayfun(@(wf) sprintf('%.1fB', wf), width_factors, 'UniformOutput', false);
+
 % 自相关对数图（可选）
 figure(1);
 for i = 1:num_cases
@@ -165,9 +169,53 @@ for i = 1:num_cases
 end
 xlabel('Time Delay (\mus)');
 ylabel('Amplitude (dB)');
-legend('Window Width:1.0B', 'Window Width:1.5B', 'Window Width:2.0B', 'Window Width:2.5B', 'Location', 'best');
+legend(legend_labels, 'Location', 'best');
 grid on;
 ylim([-120, 0]);
+
+% figure(4) 频谱计算方法（按给定实现）
+figure(4);
+s_ideal = s_lfm / sqrt(sum(abs(s_lfm).^2) + eps);
+
+s_ideal_padded = zeros(N_fft, 1);
+s_ideal_padded(1:N_pulse) = s_ideal;
+S_ideal_mag = fftshift(abs(fft(s_ideal_padded, N_fft)));
+
+S_with_H = S_LFM_k .* H_k;
+s_with_H_time = ifft(S_with_H, N_fft);
+s_with_H = s_with_H_time(1:N_pulse);
+s_with_H = s_with_H / sqrt(sum(abs(s_with_H).^2) + eps);
+s_with_H_padded = zeros(N_fft, 1);
+s_with_H_padded(1:N_pulse) = s_with_H;
+S_no_comp_mag = fftshift(abs(fft(s_with_H_padded, N_fft)));
+
+S_tx_with_comp = S_LFM_k .* G_tx_k .* H_k;
+s_tx_with_H_time = ifft(S_tx_with_comp, N_fft);
+s_tx_with_H = s_tx_with_H_time(1:N_pulse);
+s_tx_with_H = s_tx_with_H / sqrt(sum(abs(s_tx_with_H).^2) + eps);
+s_tx_with_H_padded = zeros(N_fft, 1);
+s_tx_with_H_padded(1:N_pulse) = s_tx_with_H;
+S_with_comp_mag = fftshift(abs(fft(s_tx_with_H_padded, N_fft)));
+
+plot(freq/1e6, 20*log10(S_ideal_mag/max(S_ideal_mag) + 1e-10), 'k-', 'LineWidth', 1.5); hold on;
+plot(freq/1e6, 20*log10(S_no_comp_mag/max(S_no_comp_mag) + 1e-10), 'r--', 'LineWidth', 1.5);
+plot(freq/1e6, 20*log10(S_with_comp_mag/max(S_with_comp_mag) + 1e-10), 'b-.', 'LineWidth', 1.5);
+xlim([-B/1e6*1.5, B/1e6*1.5]); ylim([-100, 5]);
+xlabel('Frequency (MHz)'); ylabel('Amplitude (dB)');
+legend('LFM', 'S_{out}(f)', 'S_{tx}(f)', 'Location', 'best');
+grid on;
+
+% figure(8) 代码样式：自相关主瓣对比
+center_idx_plot = ceil(length(t_corr)/2);
+range_idx = center_idx_plot-50:center_idx_plot+50;
+figure(5);
+plot(t_corr(range_idx), auto_corr_abs_all(range_idx,1), 'k-', 'LineWidth', 1.5); hold on;
+plot(t_corr(range_idx), auto_corr_abs_all(range_idx,2), 'r--', 'LineWidth', 1.5);
+plot(t_corr(range_idx), auto_corr_abs_all(range_idx,3), 'b-.', 'LineWidth', 1.5);
+plot(t_corr(range_idx), auto_corr_abs_all(range_idx,4), 'm:', 'LineWidth', 1.5);
+xlabel('Time Delay(\mus)'); ylabel('Normalized Amplitude');
+legend(legend_labels{:}, 'Location', 'best');
+grid on;
 
 % 正则化因子灵敏度图（restoration error）
 figure(3);
