@@ -238,6 +238,8 @@ num_windows = numel(window_names);
 auto_corr_windows_db = zeros(2*N_pulse-1, num_windows);
 PSLR_windows = zeros(num_windows, 1);
 ISLR_windows = zeros(num_windows, 1);
+MW_windows = zeros(num_windows, 1);
+PAPR_windows = zeros(num_windows, 1);
 
 for i = 1:num_windows
     % 生成传统窗（频域带宽固定为 B）
@@ -275,6 +277,8 @@ for i = 1:num_windows
     center_idx_win = ceil(length(auto_corr_win)/2);
     PSLR_windows(i) = compute_pslr_corrected(auto_corr_win, center_idx_win, fs, B);
     ISLR_windows(i) = compute_islr_corrected(auto_corr_win, center_idx_win, fs, B);
+    MW_windows(i) = compute_3db_width_corrected(auto_corr_win, center_idx_win, fs, B);
+    PAPR_windows(i) = 10*log10(max(abs(s_with_H_win).^2) / (mean(abs(s_with_H_win).^2) + eps));
 end
 
 % 传统窗自相关对数对比
@@ -288,22 +292,13 @@ legend(window_names, 'Location', 'best');
 grid on; ylim([-120, 0]);
 title('Traditional Window Comparison (Autocorrelation, dB)');
 
-% 传统窗指标对比
-figure(12);
-plot(1:num_windows, PSLR_windows, 'o-b', 'LineWidth', 1.5, 'MarkerSize', 7); hold on;
-plot(1:num_windows, ISLR_windows, 's-r', 'LineWidth', 1.5, 'MarkerSize', 7);
-xticks(1:num_windows);
-xticklabels(window_names);
-xlabel('Traditional window type');
-ylabel('Metric (dB)');
-title('Traditional Window Metric Comparison');
-legend('PSLR', 'ISLR', 'Location', 'best');
-grid on;
+% 表格输出（去掉 Figure 12）
+window_col = string(window_names(:));
+result_tbl = table(window_col, PSLR_windows, ISLR_windows, MW_windows, PAPR_windows, ...
+    'VariableNames', {'Window', 'PSLR_dB', 'ISLR_dB', 'MW_us', 'PAPR_dB'});
 
-fprintf('\n=== Traditional Window Comparison ===\n');
-for i = 1:num_windows
-    fprintf('%s -> PSLR: %.3f dB, ISLR: %.3f dB\n', window_names{i}, PSLR_windows(i), ISLR_windows(i));
-end
+fprintf('\n=== Traditional Window Comparison Table ===\n');
+disp(result_tbl);
 
 %% 辅助函数
 function pslr = compute_pslr_corrected(corr_signal, peak_idx, fs, B)
@@ -342,5 +337,28 @@ function islr = compute_islr_corrected(corr_signal, peak_idx, fs, B)
         islr = 10*log10(sidelobe_energy / mainlobe_energy + eps);
     else
         islr = inf;
+    end
+end
+
+function bw_3db = compute_3db_width_corrected(corr_signal, peak_idx, fs, B)
+    corr_mag = abs(corr_signal);
+    peak_value = corr_mag(peak_idx);
+    threshold_3db = peak_value / sqrt(2);
+
+    left_idx = peak_idx;
+    while left_idx > 1 && corr_mag(left_idx) >= threshold_3db
+        left_idx = left_idx - 1;
+    end
+
+    right_idx = peak_idx;
+    while right_idx < length(corr_mag) && corr_mag(right_idx) >= threshold_3db
+        right_idx = right_idx + 1;
+    end
+
+    width_samples = right_idx - left_idx;
+    bw_3db = width_samples / fs * 1e6;  % us
+
+    if bw_3db <= 0 || bw_3db > 100
+        bw_3db = 0.886 / B * 1e6;
     end
 end
