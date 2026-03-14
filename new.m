@@ -110,13 +110,13 @@ PAPR_hamming = compute_papr(s_tx_hamming_with_H);
 
 %% NEW: 优化广义余弦窗设计
 %% NEW: 萤火虫算法优化
-rng(1);
+rng(20);
 lambda1 = 10;
-lambda2 = 1;
-fa_opt.pop_size = 20;
-fa_opt.max_iter = 30;
+lambda2 = 30;
+fa_opt.pop_size = 30;
+fa_opt.max_iter = 50;
 fa_opt.beta0 = 1;
-fa_opt.gamma = 1;
+fa_opt.gamma = 2;
 fa_opt.alpha = 0.2;
 fa_opt.verbose = true;
 
@@ -230,35 +230,14 @@ Nw = L;
 
 % 构造对比窗（与opt窗同长度）
 W_hamming = hamming_win_local(:);
-W_kaiser = kaiser(Nw, 6).';
-if exist('taylorwin', 'file')
-    W_taylor = taylorwin(Nw, 4, -35).';
-else
-    % 兼容环境：若无taylorwin，退化为Kaiser近似
-    W_taylor = kaiser(Nw, 5).';
-end
-W_cheb = chebwin(Nw, 80).';
 W_opt = opt_gc_local(:).';
 
-win_list = {W_hamming, W_kaiser, W_taylor, W_cheb, W_opt};
-labels = {'Hamming','Kaiser','Taylor','Chebyshev','Proposed'};
-styles = {'r--','b-.','m:','c--','g-'};
-widths = [1.0, 1.0, 1.2, 1.0, 1.5];
+win_list = {W_hamming,  W_opt};
+labels = {'Hamming','Proposed'};
+styles = {'r--','b-.'};
+widths = [1.0, 1.0];
 
-% (a) 窗函数频率响应
-nexttile;
-f_norm = (0:Nfft_plot-1)'/Nfft_plot;
-for ii = 1:numel(win_list)
-    Hi = abs(fft(win_list{ii}, Nfft_plot));
-    plot(f_norm, 20*log10(Hi/(max(Hi)+eps)+eps), styles{ii}, 'LineWidth', widths(ii)); hold on;
-end
-xlabel('Normalized Frequency (\times\pi rad/sample)');
-ylabel('Magnitude (dB)');
-legend(labels, 'Location','best');
-grid on; xlim([0 0.2]); ylim([-160 5]);
-text(0.5, -0.26, '(a)', 'Units', 'normalized', 'FontWeight', 'bold', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
-
-% (b) 时域窗形
+% (a) 时域窗形
 nexttile;
 n = (0:Nw-1)';
 for ii = 1:numel(win_list)
@@ -270,7 +249,7 @@ legend(labels, 'Location','best');
 grid on; xlim([0 Nw-1]);
 text(0.5, -0.26, '(b)', 'Units', 'normalized', 'FontWeight', 'bold', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
 
-% (c) 低通 FIR 响应（窗法）
+% (b) 低通 FIR 响应（窗法）
 nexttile;
 M_fir = max(32, 2*floor(Nw/4));
 wc = 0.25;  % 归一化截止频率（相对Nyquist）
@@ -293,19 +272,6 @@ ylabel('Magnitude response (dB)');
 legend(labels, 'Location','best');
 grid on; xlim([0 1]); ylim([-150 5]);
 text(0.5, -0.26, '(c)', 'Units', 'normalized', 'FontWeight', 'bold', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
-
-% (d) FIR 幅度误差（相对理想低通）
-nexttile;
-Hd = double(w_fir{1} <= wc*pi);
-for ii = 1:numel(win_list)
-    err_i = abs(abs(H_fir{ii}) - Hd);
-    semilogy(w_fir{ii}/pi, err_i + eps, styles{ii}, 'LineWidth', widths(ii)); hold on;
-end
-xlabel('Normalized Frequency (\times\pi rad/sample)');
-ylabel('Amplitude error');
-legend(labels, 'Location','best');
-grid on; xlim([0 1]);
-text(0.5, -0.26, '(d)', 'Units', 'normalized', 'FontWeight', 'bold', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
 
 %% 步骤6: 命令行输出指标表
 fprintf('\n%-35s %-12s %-12s %-22s %-12s\n', 'Method', 'PSLR (dB)', 'ISLR (dB)', '3-dB Mainlobe Width (us)', 'PAPR (dB)');
@@ -463,7 +429,7 @@ mainlobe_width = compute_3db_width_corrected(auto_corr, peak_idx, fs, B);
 papr_db = compute_papr(s_out);
 
 % NEW: 在J函数中使用dB量的PSLR与ISLR
-J = pslr_db + islr_db ...
+J = 1 *pslr_db + 1 *islr_db ...
     + lambda1 * max(0, mainlobe_width - mlw_ham)^2 ...
     + lambda2 * max(0, papr_db - papr_ham)^2;
 
