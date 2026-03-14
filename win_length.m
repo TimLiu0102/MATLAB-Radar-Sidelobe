@@ -69,8 +69,8 @@ MLW_vec  = zeros(num_cases,1);   % 主瓣宽度(3dB), us
 % 用于可视化
 t_corr = (-N_pulse+1:N_pulse-1) / fs * 1e6;  % 微秒
 auto_corr_db_all = zeros(length(t_corr), num_cases);
+auto_corr_abs_all = zeros(length(t_corr), num_cases);
 spec_tx_db_all = zeros(N_fft, num_cases);
-spec_rx_db_all = zeros(N_fft, num_cases);
 
 for i = 1:num_cases
     wf = width_factors(i);
@@ -96,9 +96,7 @@ for i = 1:num_cases
 
     % 频谱（dB）
     spec_tx_shift = fftshift(S_tx_full);
-    spec_rx_shift = fftshift(S_tx_with_H);
     spec_tx_db_all(:, i) = 20*log10(abs(spec_tx_shift) / (max(abs(spec_tx_shift)) + eps) + 1e-10);
-    spec_rx_db_all(:, i) = 20*log10(abs(spec_rx_shift) / (max(abs(spec_rx_shift)) + eps) + 1e-10);
 
     % 截取并归一化
     s_case = s_tx_with_H_time(1:N_pulse);
@@ -107,6 +105,7 @@ for i = 1:num_cases
     % 自相关
     auto_corr = xcorr(s_case, s_case);
     auto_corr = auto_corr / (max(abs(auto_corr)) + eps);
+    auto_corr_abs_all(:, i) = abs(auto_corr);
     auto_corr_db = 20*log10(abs(auto_corr) + 1e-10);
     auto_corr_db_all(:, i) = auto_corr_db;
 
@@ -179,33 +178,28 @@ legend(legend_labels, 'Location', 'best');
 grid on;
 ylim([-120, 0]);
 
-% 发射频谱对比图
+% figure(7) 代码样式：发射频谱对比
 figure(4);
-for i = 1:num_cases
-    plot(freq/1e6, spec_tx_db_all(:, i), 'LineWidth', 1.2); hold on;
-end
-xlabel('Frequency (MHz)');
-ylabel('Amplitude (dB)');
-title('TX Spectrum vs Window Width');
-legend(legend_labels, 'Location', 'best');
+plot(freq/1e6, spec_tx_db_all(:,1), 'k-', 'LineWidth', 1.5); hold on;
+plot(freq/1e6, spec_tx_db_all(:,2), 'r--', 'LineWidth', 1.5);
+plot(freq/1e6, spec_tx_db_all(:,3), 'b-.', 'LineWidth', 1.5);
+plot(freq/1e6, spec_tx_db_all(:,4), 'm:', 'LineWidth', 1.5);
+xlim([-B/1e6*1.5, B/1e6*1.5]); ylim([-50, 0]);
+xlabel('Frequency (MHz)'); ylabel('Amplitude (dB)');
+legend(legend_labels{:}, 'Location', 'best');
 grid on;
-ylim([-120, 5]);
-xline(B/2/1e6, '--k', 'LineWidth', 1.0);
-xline(-B/2/1e6, '--k', 'LineWidth', 1.0);
 
-% 接收频谱对比图（经过H）
+% figure(8) 代码样式：自相关主瓣对比
+center_idx_plot = ceil(length(t_corr)/2);
+range_idx = center_idx_plot-50:center_idx_plot+50;
 figure(5);
-for i = 1:num_cases
-    plot(freq/1e6, spec_rx_db_all(:, i), 'LineWidth', 1.2); hold on;
-end
-xlabel('Frequency (MHz)');
-ylabel('Amplitude (dB)');
-title('RX Spectrum (After H) vs Window Width');
-legend(legend_labels, 'Location', 'best');
+plot(t_corr(range_idx), auto_corr_abs_all(range_idx,1), 'k-', 'LineWidth', 1.5); hold on;
+plot(t_corr(range_idx), auto_corr_abs_all(range_idx,2), 'r--', 'LineWidth', 1.5);
+plot(t_corr(range_idx), auto_corr_abs_all(range_idx,3), 'b-.', 'LineWidth', 1.5);
+plot(t_corr(range_idx), auto_corr_abs_all(range_idx,4), 'm:', 'LineWidth', 1.5);
+xlabel('Time Delay(\mus)'); ylabel('Normalized Amplitude');
+legend(legend_labels{:}, 'Location', 'best');
 grid on;
-ylim([-120, 5]);
-xline(B/2/1e6, '--k', 'LineWidth', 1.0);
-xline(-B/2/1e6, '--k', 'LineWidth', 1.0);
 
 % 正则化因子灵敏度图（restoration error）
 figure(3);
