@@ -122,6 +122,7 @@ end
 alpha_reg_candidates = [1e-4, 1e-3, 1e-2, 1e-1];
 num_alpha = numel(alpha_reg_candidates);
 restoration_error_vec = zeros(num_alpha, 1);
+time_error_vec = zeros(num_alpha, 1);
 
 for i = 1:num_alpha
     alpha_i = alpha_reg_candidates(i);
@@ -140,14 +141,20 @@ for i = 1:num_alpha
     S_tx_i = S_LFM_k .* G_tx_i;
     S_rx_i = S_tx_i .* H_k;
 
-    % 评价指标: restoration error (normalized in-band spectrum error)
-    restoration_error_vec(i) = compute_spectrum_error(S_LFM_k, S_rx_i, freq, B);
+    % 转到时域后计算参考误差（含 time_nmse / spec_nmse）
+    s_cmp_i = ifft(S_rx_i, N_fft);
+    s_cmp_i = s_cmp_i(1:N_pulse);
+    err_i = evaluate_reference_error(s_cmp_i, S_LFM_k, N_pulse, N_fft, freq, B);
+
+    % restoration error 使用 spec_nmse
+    restoration_error_vec(i) = err_i.spec_nmse;
+    time_error_vec(i) = err_i.time_nmse;
 end
 
 fprintf('\n=== Regularization Factor Sensitivity Analysis (Restoration Error) ===\n');
 for i = 1:num_alpha
-    fprintf('alpha = %.4g -> restoration error: %.6f\n', ...
-        alpha_reg_candidates(i), restoration_error_vec(i));
+    fprintf('alpha = %.4g -> restoration error(spec_nmse): %.6f, time_nmse: %.6f\n', ...
+        alpha_reg_candidates(i), restoration_error_vec(i), time_error_vec(i));
 end
 
 %% 步骤5: 绘图
@@ -283,4 +290,18 @@ function E_spec = compute_spectrum_error(S_ideal_k, S_out_k, freq, B)
     A = A / (norm(A,2) + eps);
     Bv = Bv / (norm(Bv,2) + eps);
     E_spec = (norm(Bv - A, 2)^2) / (norm(A, 2)^2 + eps);
+end
+
+
+function err = evaluate_reference_error(s_cmp, S_ideal_k, N_pulse, N_fft, freq, B)
+    s_ideal = ifft(S_ideal_k, N_fft);
+    s_ideal = s_ideal(1:N_pulse);
+    s_ideal = s_ideal / sqrt(sum(abs(s_ideal).^2) + eps);
+    s_cmp = s_cmp / sqrt(sum(abs(s_cmp).^2) + eps);
+
+    err.time_nmse = norm(s_cmp - s_ideal, 2)^2 / (norm(s_ideal,2)^2 + eps);
+
+    s_cmp_pad = zeros(N_fft,1); s_cmp_pad(1:N_pulse) = s_cmp;
+    S_cmp = fft(s_cmp_pad, N_fft);
+    err.spec_nmse = compute_spectrum_error(S_ideal_k, S_cmp, freq, B);
 end
