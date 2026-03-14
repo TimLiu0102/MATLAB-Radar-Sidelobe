@@ -70,7 +70,6 @@ MLW_vec  = zeros(num_cases,1);   % 主瓣宽度(3dB), us
 t_corr = (-N_pulse+1:N_pulse-1) / fs * 1e6;  % 微秒
 auto_corr_db_all = zeros(length(t_corr), num_cases);
 auto_corr_abs_all = zeros(length(t_corr), num_cases);
-s_tx_case_all = zeros(N_pulse, num_cases);
 
 for i = 1:num_cases
     wf = width_factors(i);
@@ -177,27 +176,36 @@ legend(legend_labels, 'Location', 'best');
 grid on;
 ylim([-120, 0]);
 
-% figure(7) 计算方法：时域补零->FFT->幅度谱归一化(dB)
+% figure(4) 频谱计算方法（按给定实现）
 figure(4);
-s_tx_case_1_padded = zeros(N_fft, 1); s_tx_case_1_padded(1:N_pulse) = s_tx_case_all(:,1);
-S_tx_case_1_mag = fftshift(abs(fft(s_tx_case_1_padded, N_fft)));
-plot(freq/1e6, 20*log10(S_tx_case_1_mag/max(S_tx_case_1_mag) + 1e-10), 'k-', 'LineWidth', 1.5); hold on;
+s_ideal = s_lfm / sqrt(sum(abs(s_lfm).^2) + eps);
 
-s_tx_case_2_padded = zeros(N_fft, 1); s_tx_case_2_padded(1:N_pulse) = s_tx_case_all(:,2);
-S_tx_case_2_mag = fftshift(abs(fft(s_tx_case_2_padded, N_fft)));
-plot(freq/1e6, 20*log10(S_tx_case_2_mag/max(S_tx_case_2_mag) + 1e-10), 'r--', 'LineWidth', 1.5);
+s_ideal_padded = zeros(N_fft, 1);
+s_ideal_padded(1:N_pulse) = s_ideal;
+S_ideal_mag = fftshift(abs(fft(s_ideal_padded, N_fft)));
 
-s_tx_case_3_padded = zeros(N_fft, 1); s_tx_case_3_padded(1:N_pulse) = s_tx_case_all(:,3);
-S_tx_case_3_mag = fftshift(abs(fft(s_tx_case_3_padded, N_fft)));
-plot(freq/1e6, 20*log10(S_tx_case_3_mag/max(S_tx_case_3_mag) + 1e-10), 'b-.', 'LineWidth', 1.5);
+S_with_H = S_LFM_k .* H_k;
+s_with_H_time = ifft(S_with_H, N_fft);
+s_with_H = s_with_H_time(1:N_pulse);
+s_with_H = s_with_H / sqrt(sum(abs(s_with_H).^2) + eps);
+s_with_H_padded = zeros(N_fft, 1);
+s_with_H_padded(1:N_pulse) = s_with_H;
+S_no_comp_mag = fftshift(abs(fft(s_with_H_padded, N_fft)));
 
-s_tx_case_4_padded = zeros(N_fft, 1); s_tx_case_4_padded(1:N_pulse) = s_tx_case_all(:,4);
-S_tx_case_4_mag = fftshift(abs(fft(s_tx_case_4_padded, N_fft)));
-plot(freq/1e6, 20*log10(S_tx_case_4_mag/max(S_tx_case_4_mag) + 1e-10), 'm:', 'LineWidth', 1.5);
+S_tx_with_comp = S_LFM_k .* G_tx_k .* H_k;
+s_tx_with_H_time = ifft(S_tx_with_comp, N_fft);
+s_tx_with_H = s_tx_with_H_time(1:N_pulse);
+s_tx_with_H = s_tx_with_H / sqrt(sum(abs(s_tx_with_H).^2) + eps);
+s_tx_with_H_padded = zeros(N_fft, 1);
+s_tx_with_H_padded(1:N_pulse) = s_tx_with_H;
+S_with_comp_mag = fftshift(abs(fft(s_tx_with_H_padded, N_fft)));
 
-xlim([-B/1e6*1.5, B/1e6*1.5]); ylim([-50, 0]);
+plot(freq/1e6, 20*log10(S_ideal_mag/max(S_ideal_mag) + 1e-10), 'k-', 'LineWidth', 1.5); hold on;
+plot(freq/1e6, 20*log10(S_no_comp_mag/max(S_no_comp_mag) + 1e-10), 'r--', 'LineWidth', 1.5);
+plot(freq/1e6, 20*log10(S_with_comp_mag/max(S_with_comp_mag) + 1e-10), 'b-.', 'LineWidth', 1.5);
+xlim([-B/1e6*1.5, B/1e6*1.5]); ylim([-100, 5]);
 xlabel('Frequency (MHz)'); ylabel('Amplitude (dB)');
-legend(legend_labels{:}, 'Location', 'best');
+legend('LFM', 'S_{out}(f)', 'S_{tx}(f)', 'Location', 'best');
 grid on;
 
 % figure(8) 代码样式：自相关主瓣对比
