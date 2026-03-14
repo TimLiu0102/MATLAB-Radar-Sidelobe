@@ -118,6 +118,45 @@ for i = 1:num_cases
         width_factors(i), PSLR_vec(i), ISLR_vec(i), PAPR_vec(i), MLW_vec(i));
 end
 
+%% 步骤4.1: 正则化因子灵敏度分析（restoration error）
+alpha_reg_candidates = [1e-4, 1e-3, 1e-2, 1e-1];
+num_alpha = numel(alpha_reg_candidates);
+restoration_error_vec = zeros(num_alpha, 1);
+time_error_vec = zeros(num_alpha, 1);
+
+for i = 1:num_alpha
+    alpha_i = alpha_reg_candidates(i);
+
+    % 预补偿（不加窗）
+    epsilon_i = alpha_i * mean(abs(H_k .* S_LFM_k));
+    G_tx_i = R_k ./ (H_k .* S_LFM_k + epsilon_i);
+
+    % 幅度限制
+    G_tx_i_mag = abs(G_tx_i);
+    if max(G_tx_i_mag) > A_max
+        G_tx_i = G_tx_i ./ max(1, G_tx_i_mag/A_max);
+    end
+
+    % 发射频谱 + 系统响应后频谱
+    S_tx_i = S_LFM_k .* G_tx_i;
+    S_rx_i = S_tx_i .* H_k;
+
+    % 转到时域后计算参考误差（含 time_nmse / spec_nmse）
+    s_cmp_i = ifft(S_rx_i, N_fft);
+    s_cmp_i = s_cmp_i(1:N_pulse);
+    err_i = evaluate_reference_error(s_cmp_i, S_LFM_k, N_pulse, N_fft, freq, B);
+
+    % restoration error 使用 spec_nmse
+    restoration_error_vec(i) = err_i.spec_nmse;
+    time_error_vec(i) = err_i.time_nmse;
+end
+
+fprintf('\n=== Regularization Factor Sensitivity Analysis (Restoration Error) ===\n');
+for i = 1:num_alpha
+    fprintf('alpha = %.4g -> restoration error(spec_nmse): %.6f, time_nmse: %.6f\n', ...
+        alpha_reg_candidates(i), restoration_error_vec(i), time_error_vec(i));
+end
+
 %% 步骤5: 绘图
 % 自相关对数图（可选）
 figure(1);
@@ -129,6 +168,14 @@ ylabel('Amplitude (dB)');
 legend('Window Width:1.0B', 'Window Width:1.5B', 'Window Width:2.0B', 'Window Width:2.5B', 'Location', 'best');
 grid on;
 ylim([-120, 0]);
+
+% 正则化因子灵敏度图（restoration error）
+figure(3);
+semilogx(alpha_reg_candidates, restoration_error_vec, 'o-b', 'LineWidth', 1.5, 'MarkerSize', 7);
+xlabel('regularization factor \alpha');
+ylabel('restoration error (normalized in-band spectrum error)');
+title('Sensitivity Analysis vs Regularization Factor');
+grid on;
 
 % 你要求的灵敏度分析双纵轴图
 figure(2);
@@ -232,4 +279,29 @@ end
 function papr_db = compute_papr(x)
 p = abs(x).^2;
 papr_db = 10 * log10(max(p) / mean(p));
+end
+
+function E_spec = compute_spectrum_error(S_ideal_k, S_out_k, freq, B)
+    % 方案A：归一化幅度均方误差（稳健）
+    band_idx = abs(freq)<=B/2; % 在有效带宽内评价
+    A = abs(S_ideal_k(band_idx));
+    Bv = abs(S_out_k(band_idx));
+    % 先在带内做L2归一化，抑制“仅幅度尺度不同”导致的失真误判
+    A = A / (norm(A,2) + eps);
+    Bv = Bv / (norm(Bv,2) + eps);
+    E_spec = (norm(Bv - A, 2)^2) / (norm(A, 2)^2 + eps);
+end
+
+
+function err = evaluate_reference_error(s_cmp, S_ideal_k, N_pulse, N_fft, freq, B)
+    s_ideal = ifft(S_ideal_k, N_fft);
+    s_ideal = s_ideal(1:N_pulse);
+    s_ideal = s_ideal / sqrt(sum(abs(s_ideal).^2) + eps);
+    s_cmp = s_cmp / sqrt(sum(abs(s_cmp).^2) + eps);
+
+    err.time_nmse = norm(s_cmp - s_ideal, 2)^2 / (norm(s_ideal,2)^2 + eps);
+
+    s_cmp_pad = zeros(N_fft,1); s_cmp_pad(1:N_pulse) = s_cmp;
+    S_cmp = fft(s_cmp_pad, N_fft);
+    err.spec_nmse = compute_spectrum_error(S_ideal_k, S_cmp, freq, B);
 end
