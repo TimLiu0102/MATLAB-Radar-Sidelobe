@@ -18,6 +18,13 @@ freq = (-N_fft/2:N_fft/2-1) * (fs/N_fft);  % 频率轴
 alpha_reg = 1e-2;       % 正则化因子系数（增大了）
 A_max = 4.0;            % 最大增益限制（适当增大）
 
+% 鲁棒优化参数（按给定思路：多场景均值 + 最坏场景项）
+K_robust = 20;          % 扰动场景数（推荐10或20）
+mu_robust = 0.3;        % 最坏场景权重
+delta_a = 0.05;         % 幅度扰动上界（±5%）
+delta_phi_deg = 5;      % 相位扰动上界（度）
+delta_phi = delta_phi_deg*pi/180;
+
 % 显示参数
 f_center_idx = find(abs(freq)<=B/2);
 
@@ -37,6 +44,9 @@ H_phase(f_center_idx) = 0.4*pi*(freq(f_center_idx)/B).^3 + ...
 % 组合成复数频率响应
 H_k = H_mag .* exp(1j*H_phase);
 H_k = fftshift(H_k);  % 转换为MATLAB的FFT顺序
+
+% 构造鲁棒优化场景集合 Ω={H^(1),...,H^(K)}
+H_scenarios = build_perturbed_channels(H_k, f_center_idx, K_robust, delta_a, delta_phi);
 
 %% 步骤1: 生成理想LFM信号及其频谱
 % 生成时域LFM信号
@@ -121,9 +131,9 @@ fa_opt.alpha = 0.2;
 fa_opt.verbose = true;
 
 best_param = optimize_generalized_cosine_fa(...
-    G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, ...
+    G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, ...
     mainlobe_width_hamming, PAPR_hamming, ...
-    lambda1, lambda2, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B);
+    lambda1, lambda2, mu_robust, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B);
 
 best_coeff = best_param(1:3);
 best_width_B_multiple = best_param(4);
@@ -228,9 +238,10 @@ fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Distorted output', PSLR_no_c
 fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Hamming window', PSLR_hamming, ISLR_hamming, mainlobe_width_hamming, PAPR_hamming);
 fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Optimized generalized cosine window', PSLR_opt, ISLR_opt, mainlobe_width_opt, PAPR_opt);
 fprintf('Optimized [a0, a1, a2] = [%.4f, %.4f, %.4f], window width = %.4f * B\n', best_coeff(1), best_coeff(2), best_coeff(3), best_width_B_multiple);
+fprintf('Robust settings: K=%d, mu=%.3f, delta_a=%.3f, delta_phi=%.2f deg\n', K_robust, mu_robust, delta_a, delta_phi_deg);
 
 %% ===== local functions =====
-function best_param = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B)
+function best_param = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, mu_robust, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B)
 pop_size = fa_opt.pop_size;
 max_iter = fa_opt.max_iter;
 beta0 = fa_opt.beta0;
@@ -250,7 +261,7 @@ end
 
 J = zeros(pop_size, 1);
 for i = 1:pop_size
-    J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, fs, B);
+    J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, mu_robust, fs, B);
 end
 
 for iter = 1:max_iter
@@ -261,16 +272,16 @@ for iter = 1:max_iter
                 beta = beta0 * exp(-gamma * r2);
                 step = beta * (pop(j, :) - pop(i, :)) + alpha * ([rand(1, 3)-0.5, rand-0.5]);
                 pop(i, :) = project_coeffs(pop(i, :) + step, min_width_B_multiple, max_width_B_multiple);
-                J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, fs, B);
+                J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, mu_robust, fs, B);
             end
         end
     end
 
     [best_J, best_idx_iter] = min(J);
     if verbose
-        [~, metrics] = evaluate_window_objective(pop(best_idx_iter, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, fs, B);
-        fprintf('FA iter %02d/%02d | J=%.4f | PSLR=%.3f dB | ISLR=%.3f dB | Mainlobe=%.4f us | PAPR=%.3f dB | Width=%.3f*B\n', ...
-            iter, max_iter, best_J, metrics.pslr_db, metrics.islr_db, metrics.mainlobe_width, metrics.papr_db, pop(best_idx_iter, 4));
+        [~, metrics] = evaluate_window_objective(pop(best_idx_iter, :), G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, mu_robust, fs, B);
+        fprintf('FA iter %02d/%02d | J=%.4f (mean %.4f + mu*max %.4f) | PSLR=%.3f dB | ISLR=%.3f dB | Mainlobe=%.4f us | PAPR=%.3f dB | Width=%.3f*B\n', ...
+            iter, max_iter, best_J, metrics.mean_J, metrics.max_J, metrics.pslr_db, metrics.islr_db, metrics.mainlobe_width, metrics.papr_db, pop(best_idx_iter, 4));
     end
 end
 
@@ -278,7 +289,7 @@ end
 best_param = pop(best_idx, :);
 end
 
-function [J, metrics] = evaluate_window_objective(param, G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, fs, B)
+function [J, metrics] = evaluate_window_objective(param, G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, mu_robust, fs, B)
 L = length(f_idx);
 coeff = param(1:3);
 width_B_multiple = param(4);
@@ -287,30 +298,47 @@ win = zeros(N_fft, 1);
 win(f_idx) = win_local;
 W_k = fftshift(win);
 
-S_tx_k = S_LFM_k .* (G_tx_k .* W_k);
-s_tx_time = ifft(S_tx_k, N_fft);
-S_tx_full = fft(s_tx_time, N_fft);
-S_tx_with_H = S_tx_full .* H_k;
-s_out_time = ifft(S_tx_with_H, N_fft);
-s_out = s_out_time(1:N_pulse);
-s_out = s_out / sqrt(sum(abs(s_out).^2));
+K = size(H_scenarios, 2);
+J_list = zeros(K,1);
+metric_list = zeros(K,4); % [pslr, islr, mainlobe, papr]
 
-auto_corr = xcorr(s_out, s_out);
-auto_corr = auto_corr / max(abs(auto_corr));
+for k = 1:K
+    H_k = H_scenarios(:, k);
+    S_tx_k = S_LFM_k .* (G_tx_k .* W_k);
+    s_tx_time = ifft(S_tx_k, N_fft);
+    S_tx_full = fft(s_tx_time, N_fft);
+    S_tx_with_H = S_tx_full .* H_k;
+    s_out_time = ifft(S_tx_with_H, N_fft);
+    s_out = s_out_time(1:N_pulse);
+    s_out = s_out / sqrt(sum(abs(s_out).^2));
 
-peak_idx = ceil(length(auto_corr)/2);
-pslr_db = compute_pslr_corrected(auto_corr, peak_idx, fs, B);
-islr_db = compute_islr_corrected(auto_corr, peak_idx, fs, B);
-mainlobe_width = compute_3db_width_corrected(auto_corr, peak_idx, fs, B);
-papr_db = compute_papr(s_out);
+    auto_corr = xcorr(s_out, s_out);
+    auto_corr = auto_corr / max(abs(auto_corr));
 
-% NEW: 在J函数中使用dB量的PSLR与ISLR
-J = pslr_db + islr_db ...
-    + lambda1 * max(0, mainlobe_width - mlw_ham)^2 ...
-    + lambda2 * max(0, papr_db - papr_ham)^2;
+    peak_idx = ceil(length(auto_corr)/2);
+    pslr_db = compute_pslr_corrected(auto_corr, peak_idx, fs, B);
+    islr_db = compute_islr_corrected(auto_corr, peak_idx, fs, B);
+    mainlobe_width = compute_3db_width_corrected(auto_corr, peak_idx, fs, B);
+    papr_db = compute_papr(s_out);
 
-metrics = struct('pslr_db', pslr_db, 'islr_db', islr_db, ...
-                 'mainlobe_width', mainlobe_width, 'papr_db', papr_db);
+    J_k = pslr_db + islr_db ...
+        + lambda1 * max(0, mainlobe_width - mlw_ham)^2 ...
+        + lambda2 * max(0, papr_db - papr_ham)^2;
+
+    J_list(k) = J_k;
+    metric_list(k, :) = [pslr_db, islr_db, mainlobe_width, papr_db];
+end
+
+mean_J = mean(J_list);
+max_J = max(J_list);
+J = mean_J + mu_robust * max_J;
+
+[~, best_case_idx] = max(J_list);
+metrics = struct('pslr_db', metric_list(best_case_idx,1), ...
+                 'islr_db', metric_list(best_case_idx,2), ...
+                 'mainlobe_width', metric_list(best_case_idx,3), ...
+                 'papr_db', metric_list(best_case_idx,4), ...
+                 'mean_J', mean_J, 'max_J', max_J);
 end
 
 function w = build_generalized_cosine_window(L, f_local, coeff, width_B_multiple, B)
@@ -353,6 +381,21 @@ end
 
 width_B_multiple = max(min_width_B_multiple, min(max_width_B_multiple, width_B_multiple));
 param = [coeff, width_B_multiple];
+end
+
+
+function H_scenarios = build_perturbed_channels(H_nominal, inband_idx, K, delta_a, delta_phi)
+N = numel(H_nominal);
+H_scenarios = repmat(H_nominal, 1, K);
+
+for k = 1:K
+    eps_a = zeros(N,1);
+    eps_phi = zeros(N,1);
+    eps_a(inband_idx) = -delta_a + 2*delta_a*rand(numel(inband_idx),1);
+    eps_phi(inband_idx) = -delta_phi + 2*delta_phi*rand(numel(inband_idx),1);
+
+    H_scenarios(:,k) = H_nominal .* (1 + eps_a) .* exp(1j*eps_phi);
+end
 end
 
 %% 修正后的辅助函数
