@@ -302,10 +302,14 @@ disp(result_tbl);
 
 %% 辅助函数
 function pslr = compute_pslr_corrected(corr_signal, peak_idx, fs, B)
+    % 主瓣宽度估计（样点）
     mainlobe_width_samples = ceil(2 * fs / B);
+
+    % 主瓣区间
     mainlobe_start = max(1, peak_idx - mainlobe_width_samples);
     mainlobe_end = min(length(corr_signal), peak_idx + mainlobe_width_samples);
 
+    % 排除主瓣
     mask = true(length(corr_signal), 1);
     mask(mainlobe_start:mainlobe_end) = false;
 
@@ -316,6 +320,7 @@ function pslr = compute_pslr_corrected(corr_signal, peak_idx, fs, B)
 
     sidelobe_peak = max(abs(corr_signal(mask)));
     mainlobe_peak = abs(corr_signal(peak_idx));
+
     if mainlobe_peak > 0
         pslr = 20*log10(sidelobe_peak / mainlobe_peak);
     else
@@ -324,11 +329,14 @@ function pslr = compute_pslr_corrected(corr_signal, peak_idx, fs, B)
 end
 
 function islr = compute_islr_corrected(corr_signal, peak_idx, fs, B)
+    % 主瓣宽度估计（样点）
     mainlobe_width_samples = ceil(2 * fs / B);
+
     mainlobe_start = max(1, peak_idx - mainlobe_width_samples);
     mainlobe_end = min(length(corr_signal), peak_idx + mainlobe_width_samples);
 
     mainlobe_energy = sum(abs(corr_signal(mainlobe_start:mainlobe_end)).^2);
+
     mask = true(length(corr_signal), 1);
     mask(mainlobe_start:mainlobe_end) = false;
     sidelobe_energy = sum(abs(corr_signal(mask)).^2);
@@ -343,6 +351,7 @@ end
 function bw_3db = compute_3db_width_corrected(corr_signal, peak_idx, fs, B)
     corr_mag = abs(corr_signal);
     peak_value = corr_mag(peak_idx);
+
     threshold_3db = peak_value / sqrt(2);
 
     left_idx = peak_idx;
@@ -359,6 +368,10 @@ function bw_3db = compute_3db_width_corrected(corr_signal, peak_idx, fs, B)
     bw_3db = width_samples / fs * 1e6;  % us
 
     if bw_3db <= 0 || bw_3db > 100
+        bw_3db = 0.886 / B * 1e6;
+    end
+
+    if bw_3db < 0.01
         bw_3db = 0.886 / B * 1e6;
     end
 end
