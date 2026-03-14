@@ -230,3 +230,178 @@ xlim([-B/1e6*1.5, B/1e6*1.5]);
 xlabel('Frequency (MHz)'); ylabel('Phase (rad)');
 legend('LFM', 'S_{out}(f)', 'Location', 'best');
 grid on;
+
+%% 步骤8: 传统窗对比（矩形窗/汉宁窗/海明窗/布莱克曼窗）
+window_names = {'Rectangular', 'Hann', 'Hamming', 'Blackman'};
+num_windows = numel(window_names);
+
+auto_corr_windows_db = zeros(2*N_pulse-1, num_windows);
+PSLR_windows = zeros(num_windows, 1);
+ISLR_windows = zeros(num_windows, 1);
+MW_windows = zeros(num_windows, 1);
+PAPR_windows = zeros(num_windows, 1);
+
+for i = 1:num_windows
+    % 生成传统窗（频域带宽固定为 B）
+    f_idx_win = find(abs(freq) <= B/2);
+    win_full = zeros(N_fft, 1);
+
+    switch window_names{i}
+        case 'Rectangular'
+            local_win = rectwin(length(f_idx_win));
+        case 'Hann'
+            local_win = hann(length(f_idx_win));
+        case 'Hamming'
+            local_win = hamming(length(f_idx_win));
+        case 'Blackman'
+            local_win = blackman(length(f_idx_win));
+    end
+
+    win_full(f_idx_win) = local_win;
+    W_win = fftshift(win_full);
+
+    % 预补偿 + 加窗 + 系统响应
+    S_tx_win = S_LFM_k .* (G_tx_k .* W_win);
+    s_tx_win_time = ifft(S_tx_win, N_fft);
+    S_with_H_win = fft(s_tx_win_time, N_fft) .* H_k;
+    s_with_H_win = ifft(S_with_H_win, N_fft);
+    s_with_H_win = s_with_H_win(1:N_pulse);
+    s_with_H_win = s_with_H_win / sqrt(sum(abs(s_with_H_win).^2));
+
+    % 自相关
+    auto_corr_win = xcorr(s_with_H_win, s_with_H_win);
+    auto_corr_win = auto_corr_win / max(abs(auto_corr_win));
+    auto_corr_windows_db(:, i) = 20*log10(abs(auto_corr_win) + 1e-10);
+
+    % 统计指标
+    center_idx_win = ceil(length(auto_corr_win)/2);
+    PSLR_windows(i) = compute_pslr_corrected(auto_corr_win, center_idx_win, fs, B);
+    ISLR_windows(i) = compute_islr_corrected(auto_corr_win, center_idx_win, fs, B);
+    MW_windows(i) = compute_3db_width_corrected(auto_corr_win, center_idx_win, fs, B);
+    PAPR_windows(i) = compute_papr(s_with_H_win);
+end
+
+% 传统窗自相关对数对比
+figure(11);
+plot(t_corr, auto_corr_windows_db(:,1), 'k-', 'LineWidth', 1.3); hold on;
+plot(t_corr, auto_corr_windows_db(:,2), 'b--', 'LineWidth', 1.3);
+plot(t_corr, auto_corr_windows_db(:,3), 'r-.', 'LineWidth', 1.3);
+plot(t_corr, auto_corr_windows_db(:,4), 'm:', 'LineWidth', 1.8);
+xlabel('Time Delay (μs)'); ylabel('Amplitude (dB)');
+legend(window_names, 'Location', 'best');
+grid on; ylim([-120, 0]);
+title('Traditional Window Comparison (Autocorrelation, dB)');
+
+% 表格输出（去掉 Figure 12）
+window_col = string(window_names(:));
+result_tbl = table(window_col, PSLR_windows, ISLR_windows, MW_windows, PAPR_windows, ...
+    'VariableNames', {'Window', 'PSLR_dB', 'ISLR_dB', 'MW_us', 'PAPR_dB'});
+
+fprintf('\n=== Traditional Window Comparison Table ===\n');
+disp(result_tbl);
+
+%% 修正后的辅助函数
+function pslr = compute_pslr_corrected(corr_signal, peak_idx, fs, B)
+    % 修正的峰值旁瓣比计算函数
+    % 基于主瓣理论宽度定义区域
+    % 主瓣宽度 ≈ 1/B，转换为采样点数
+    mainlobe_width_samples = ceil(2 * fs / B);  % 取2倍作为安全余量
+    
+    % 确保边界有效
+    mainlobe_start = max(1, peak_idx - mainlobe_width_samples);
+    mainlobe_end = min(length(corr_signal), peak_idx + mainlobe_width_samples);
+    
+    % 创建掩码排除主瓣
+    mask = true(length(corr_signal), 1);
+    mask(mainlobe_start:mainlobe_end) = false;
+    
+    % 如果没有旁瓣，返回一个较差的值
+    if sum(mask) == 0
+        pslr = -5;  % 一个较差的值
+        return;
+    end
+    
+    % 计算旁瓣峰值和主瓣峰值
+    sidelobe_peak = max(abs(corr_signal(mask)));
+    mainlobe_peak = abs(corr_signal(peak_idx));
+    
+    % 计算PSLR（dB）
+    if mainlobe_peak > 0
+        pslr = 20*log10(sidelobe_peak / mainlobe_peak);
+    else
+        pslr = -inf;
+    end
+end
+
+function islr = compute_islr_corrected(corr_signal, peak_idx, fs, B)
+    % 修正的积分旁瓣比计算函数
+    % 主瓣宽度 ≈ 1/B，转换为采样点数
+    mainlobe_width_samples = ceil(2 * fs / B);  % 取2倍作为安全余量
+    
+    % 确保边界有效
+    mainlobe_start = max(1, peak_idx - mainlobe_width_samples);
+    mainlobe_end = min(length(corr_signal), peak_idx + mainlobe_width_samples);
+    
+    % 主瓣能量
+    mainlobe_energy = sum(abs(corr_signal(mainlobe_start:mainlobe_end)).^2);
+    
+    % 总能量
+    total_energy = sum(abs(corr_signal).^2);
+    
+    % 旁瓣能量 = 总能量 - 主瓣能量
+    sidelobe_energy = total_energy - mainlobe_energy;
+    
+    % 计算ISLR（dB）
+    if mainlobe_energy > 0 && sidelobe_energy > 0
+        islr = 10*log10(sidelobe_energy / mainlobe_energy);
+    else
+        islr = -inf;
+    end
+end
+
+function bw_3db = compute_3db_width_corrected(corr_signal, peak_idx, fs, B)
+    % 修正的3dB主瓣宽度计算函数
+    corr_mag = abs(corr_signal);
+    peak_value = corr_mag(peak_idx);
+    
+    % 找到3dB点（峰值下降3dB）
+    threshold_3db = peak_value / sqrt(2);  % -3dB点
+    
+    % 向左搜索3dB点
+    left_idx = peak_idx;
+    step_count = 0;
+    max_steps = 100;  % 防止无限循环
+    
+    while left_idx > 1 && corr_mag(left_idx) >= threshold_3db && step_count < max_steps
+        left_idx = left_idx - 1;
+        step_count = step_count + 1;
+    end
+    
+    % 向右搜索3dB点
+    right_idx = peak_idx;
+    step_count = 0;
+    
+    while right_idx < length(corr_mag) && corr_mag(right_idx) >= threshold_3db && step_count < max_steps
+        right_idx = right_idx + 1;
+        step_count = step_count + 1;
+    end
+    
+    % 计算宽度（秒）
+    width_samples = right_idx - left_idx;
+    bw_3db = width_samples / fs * 1e6;  % 转换为微秒
+    
+    % 如果找不到3dB点或宽度异常，返回理论值
+    if bw_3db <= 0 || bw_3db > 100
+        bw_3db = 0.886 / B * 1e6;  % 修正后的理论公式
+    end
+    
+    % 确保宽度不会太小
+    if bw_3db < 0.01
+        bw_3db = 0.886 / B * 1e6;
+    end
+end
+
+function papr_db = compute_papr(x)
+p = abs(x).^2;
+papr_db = 10 * log10(max(p) / mean(p));
+end
