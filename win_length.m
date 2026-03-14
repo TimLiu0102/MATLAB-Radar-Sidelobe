@@ -141,9 +141,7 @@ for i = 1:num_alpha
     S_rx_i = S_tx_i .* H_k;
 
     % 评价指标: restoration error (normalized in-band spectrum error)
-    ref_inband = S_LFM_k(f_center_idx);   % 原始LFM频谱（带内）
-    rx_inband = S_rx_i(f_center_idx);     % 预补偿（不加窗）后通过系统频谱（带内）
-    restoration_error_vec(i) = norm(rx_inband - ref_inband, 2) / (norm(ref_inband, 2) + eps);
+    restoration_error_vec(i) = compute_spectrum_error(S_LFM_k, S_rx_i, freq, B);
 end
 
 fprintf('\n=== Regularization Factor Sensitivity Analysis (Restoration Error) ===\n');
@@ -274,4 +272,15 @@ end
 function papr_db = compute_papr(x)
 p = abs(x).^2;
 papr_db = 10 * log10(max(p) / mean(p));
+end
+
+function E_spec = compute_spectrum_error(S_ideal_k, S_out_k, freq, B)
+    % 方案A：归一化幅度均方误差（稳健）
+    band_idx = abs(freq)<=B/2; % 在有效带宽内评价
+    A = abs(S_ideal_k(band_idx));
+    Bv = abs(S_out_k(band_idx));
+    % 先在带内做L2归一化，抑制“仅幅度尺度不同”导致的失真误判
+    A = A / (norm(A,2) + eps);
+    Bv = Bv / (norm(Bv,2) + eps);
+    E_spec = (norm(Bv - A, 2)^2) / (norm(A, 2)^2 + eps);
 end
