@@ -230,3 +230,117 @@ xlim([-B/1e6*1.5, B/1e6*1.5]);
 xlabel('Frequency (MHz)'); ylabel('Phase (rad)');
 legend('LFM', 'S_{out}(f)', 'Location', 'best');
 grid on;
+
+%% 步骤8: 传统窗对比（矩形窗/汉宁窗/海明窗/布莱克曼窗）
+window_names = {'Rectangular', 'Hann', 'Hamming', 'Blackman'};
+num_windows = numel(window_names);
+
+auto_corr_windows_db = zeros(2*N_pulse-1, num_windows);
+PSLR_windows = zeros(num_windows, 1);
+ISLR_windows = zeros(num_windows, 1);
+
+for i = 1:num_windows
+    % 生成传统窗（频域带宽固定为 B）
+    f_idx_win = find(abs(freq) <= B/2);
+    win_full = zeros(N_fft, 1);
+
+    switch window_names{i}
+        case 'Rectangular'
+            local_win = rectwin(length(f_idx_win));
+        case 'Hann'
+            local_win = hann(length(f_idx_win));
+        case 'Hamming'
+            local_win = hamming(length(f_idx_win));
+        case 'Blackman'
+            local_win = blackman(length(f_idx_win));
+    end
+
+    win_full(f_idx_win) = local_win;
+    W_win = fftshift(win_full);
+
+    % 预补偿 + 加窗 + 系统响应
+    S_tx_win = S_LFM_k .* (G_tx_k .* W_win);
+    s_tx_win_time = ifft(S_tx_win, N_fft);
+    S_with_H_win = fft(s_tx_win_time, N_fft) .* H_k;
+    s_with_H_win = ifft(S_with_H_win, N_fft);
+    s_with_H_win = s_with_H_win(1:N_pulse);
+    s_with_H_win = s_with_H_win / sqrt(sum(abs(s_with_H_win).^2));
+
+    % 自相关
+    auto_corr_win = xcorr(s_with_H_win, s_with_H_win);
+    auto_corr_win = auto_corr_win / max(abs(auto_corr_win));
+    auto_corr_windows_db(:, i) = 20*log10(abs(auto_corr_win) + 1e-10);
+
+    % 统计指标
+    center_idx_win = ceil(length(auto_corr_win)/2);
+    PSLR_windows(i) = compute_pslr_corrected(auto_corr_win, center_idx_win, fs, B);
+    ISLR_windows(i) = compute_islr_corrected(auto_corr_win, center_idx_win, fs, B);
+end
+
+% 传统窗自相关对数对比
+figure(11);
+plot(t_corr, auto_corr_windows_db(:,1), 'k-', 'LineWidth', 1.3); hold on;
+plot(t_corr, auto_corr_windows_db(:,2), 'b--', 'LineWidth', 1.3);
+plot(t_corr, auto_corr_windows_db(:,3), 'r-.', 'LineWidth', 1.3);
+plot(t_corr, auto_corr_windows_db(:,4), 'm:', 'LineWidth', 1.8);
+xlabel('Time Delay (μs)'); ylabel('Amplitude (dB)');
+legend(window_names, 'Location', 'best');
+grid on; ylim([-120, 0]);
+title('Traditional Window Comparison (Autocorrelation, dB)');
+
+% 传统窗指标对比
+figure(12);
+plot(1:num_windows, PSLR_windows, 'o-b', 'LineWidth', 1.5, 'MarkerSize', 7); hold on;
+plot(1:num_windows, ISLR_windows, 's-r', 'LineWidth', 1.5, 'MarkerSize', 7);
+xticks(1:num_windows);
+xticklabels(window_names);
+xlabel('Traditional window type');
+ylabel('Metric (dB)');
+title('Traditional Window Metric Comparison');
+legend('PSLR', 'ISLR', 'Location', 'best');
+grid on;
+
+fprintf('\n=== Traditional Window Comparison ===\n');
+for i = 1:num_windows
+    fprintf('%s -> PSLR: %.3f dB, ISLR: %.3f dB\n', window_names{i}, PSLR_windows(i), ISLR_windows(i));
+end
+
+%% 辅助函数
+function pslr = compute_pslr_corrected(corr_signal, peak_idx, fs, B)
+    mainlobe_width_samples = ceil(2 * fs / B);
+    mainlobe_start = max(1, peak_idx - mainlobe_width_samples);
+    mainlobe_end = min(length(corr_signal), peak_idx + mainlobe_width_samples);
+
+    mask = true(length(corr_signal), 1);
+    mask(mainlobe_start:mainlobe_end) = false;
+
+    if sum(mask) == 0
+        pslr = -5;
+        return;
+    end
+
+    sidelobe_peak = max(abs(corr_signal(mask)));
+    mainlobe_peak = abs(corr_signal(peak_idx));
+    if mainlobe_peak > 0
+        pslr = 20*log10(sidelobe_peak / mainlobe_peak);
+    else
+        pslr = -inf;
+    end
+end
+
+function islr = compute_islr_corrected(corr_signal, peak_idx, fs, B)
+    mainlobe_width_samples = ceil(2 * fs / B);
+    mainlobe_start = max(1, peak_idx - mainlobe_width_samples);
+    mainlobe_end = min(length(corr_signal), peak_idx + mainlobe_width_samples);
+
+    mainlobe_energy = sum(abs(corr_signal(mainlobe_start:mainlobe_end)).^2);
+    mask = true(length(corr_signal), 1);
+    mask(mainlobe_start:mainlobe_end) = false;
+    sidelobe_energy = sum(abs(corr_signal(mask)).^2);
+
+    if mainlobe_energy > 0
+        islr = 10*log10(sidelobe_energy / mainlobe_energy + eps);
+    else
+        islr = inf;
+    end
+end
