@@ -108,11 +108,20 @@ ISLR_hamming = compute_islr_corrected(auto_corr_hamming, peak_idx_hamming, fs, B
 mainlobe_width_hamming = compute_3db_width_corrected(auto_corr_hamming, peak_idx_hamming, fs, B);
 PAPR_hamming = compute_papr(s_tx_hamming_with_H);
 
+% LFM参考指标（作为优化约束参考）
+auto_corr_ideal = xcorr(s_ideal, s_ideal);
+auto_corr_ideal = auto_corr_ideal / max(abs(auto_corr_ideal));
+peak_idx_ideal = ceil(length(auto_corr_ideal)/2);
+mainlobe_width_lfm_ref = compute_3db_width_corrected(auto_corr_ideal, peak_idx_ideal, fs, B);
+PAPR_lfm_ref = compute_papr(s_ideal);
+
 %% NEW: 优化广义余弦窗设计
 %% NEW: 萤火虫算法优化
 rng(20);
 lambda1 = 10;
 lambda2 = 30;
+w_pslr = 1;
+w_islr = 1;
 fa_opt.pop_size = 30;
 fa_opt.max_iter = 50;
 fa_opt.beta0 = 1;
@@ -122,8 +131,8 @@ fa_opt.verbose = true;
 
 best_param = optimize_generalized_cosine_fa(...
     G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, ...
-    mainlobe_width_hamming, PAPR_hamming, ...
-    lambda1, lambda2, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B);
+    mainlobe_width_lfm_ref, PAPR_lfm_ref, ...
+    lambda1, lambda2, w_pslr, w_islr, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B);
 
 best_coeff = best_param(1:3);
 best_width_B_multiple = best_param(4);
@@ -222,8 +231,8 @@ xlim([-B/1e6*1.5, B/1e6*1.5]); ylim([-100, 5]); grid on;
 
 % 图4：论文风格四联图（适配当前脚本变量）
 figure(4);
-set(gcf, 'Position', [120, 120, 2200, 360]);
-tiledlayout(1,4,'Padding','compact','TileSpacing','compact');
+set(gcf, 'Position', [120, 120, 1200, 360]);
+tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
 
 Nfft_plot = 8192;
 Nw = L;
@@ -244,19 +253,6 @@ win_list = {W_hamming, W_kaiser, W_taylor, W_cheb, W_opt};
 labels = {'Hamming','Kaiser','Taylor','Chebyshev','Proposed'};
 styles = {'r--','b-.','m:','c--','g-'};
 widths = [1.0, 1.0, 1.2, 1.0, 1.5];
-
-% (a) 窗函数频率响应
-nexttile;
-f_norm = (0:Nfft_plot-1)'/Nfft_plot;
-for ii = 1:numel(win_list)
-    Hi = abs(fft(win_list{ii}, Nfft_plot));
-    plot(f_norm, 20*log10(Hi/(max(Hi)+eps)+eps), styles{ii}, 'LineWidth', widths(ii)); hold on;
-end
-xlabel('Normalized Frequency (\times\pi rad/sample)');
-ylabel('Magnitude (dB)');
-legend(labels, 'Location','best');
-grid on; xlim([0 0.2]); ylim([-160 5]);
-text(0.5, -0.26, '(a)', 'Units', 'normalized', 'FontWeight', 'bold', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
 
 % (b) 时域窗形
 nexttile;
@@ -293,19 +289,6 @@ ylabel('Magnitude response (dB)');
 legend(labels, 'Location','best');
 grid on; xlim([0 1]); ylim([-150 5]);
 text(0.5, -0.26, '(c)', 'Units', 'normalized', 'FontWeight', 'bold', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
-
-% (d) FIR 幅度误差（相对理想低通）
-nexttile;
-Hd = double(w_fir{1} <= wc*pi);
-for ii = 1:numel(win_list)
-    err_i = abs(abs(H_fir{ii}) - Hd);
-    semilogy(w_fir{ii}/pi, err_i + eps, styles{ii}, 'LineWidth', widths(ii)); hold on;
-end
-xlabel('Normalized Frequency (\times\pi rad/sample)');
-ylabel('Amplitude error');
-legend(labels, 'Location','best');
-grid on; xlim([0 1]);
-text(0.5, -0.26, '(d)', 'Units', 'normalized', 'FontWeight', 'bold', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
 
 %% 步骤6: 命令行输出指标表
 fprintf('\n%-35s %-12s %-12s %-22s %-12s\n', 'Method', 'PSLR (dB)', 'ISLR (dB)', '3-dB Mainlobe Width (us)', 'PAPR (dB)');
@@ -388,7 +371,7 @@ fprintf('Optimized [a0, a1, a2] = [%.4f, %.4f, %.4f], window width = %.4f * B\n'
 % nexttile; boxplot(PAPR_runs); title('PAPR (dB)'); grid on;
 
 %% ===== local functions =====
-function best_param = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B)
+function best_param = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ref, papr_ref, lambda1, lambda2, w_pslr, w_islr, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B)
 pop_size = fa_opt.pop_size;
 max_iter = fa_opt.max_iter;
 beta0 = fa_opt.beta0;
@@ -408,7 +391,7 @@ end
 
 J = zeros(pop_size, 1);
 for i = 1:pop_size
-    J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, fs, B);
+    J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ref, papr_ref, lambda1, lambda2, w_pslr, w_islr, fs, B);
 end
 
 for iter = 1:max_iter
@@ -419,14 +402,14 @@ for iter = 1:max_iter
                 beta = beta0 * exp(-gamma * r2);
                 step = beta * (pop(j, :) - pop(i, :)) + alpha * ([rand(1, 3)-0.5, rand-0.5]);
                 pop(i, :) = project_coeffs(pop(i, :) + step, min_width_B_multiple, max_width_B_multiple);
-                J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, fs, B);
+                J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ref, papr_ref, lambda1, lambda2, w_pslr, w_islr, fs, B);
             end
         end
     end
 
     [best_J, best_idx_iter] = min(J);
     if verbose
-        [~, metrics] = evaluate_window_objective(pop(best_idx_iter, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, fs, B);
+        [~, metrics] = evaluate_window_objective(pop(best_idx_iter, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ref, papr_ref, lambda1, lambda2, w_pslr, w_islr, fs, B);
         fprintf('FA iter %02d/%02d | J=%.4f | PSLR=%.3f dB | ISLR=%.3f dB | Mainlobe=%.4f us | PAPR=%.3f dB | Width=%.3f*B\n', ...
             iter, max_iter, best_J, metrics.pslr_db, metrics.islr_db, metrics.mainlobe_width, metrics.papr_db, pop(best_idx_iter, 4));
     end
@@ -436,7 +419,7 @@ end
 best_param = pop(best_idx, :);
 end
 
-function [J, metrics] = evaluate_window_objective(param, G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, fs, B)
+function [J, metrics] = evaluate_window_objective(param, G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ref, papr_ref, lambda1, lambda2, w_pslr, w_islr, fs, B)
 L = length(f_idx);
 coeff = param(1:3);
 width_B_multiple = param(4);
@@ -462,10 +445,10 @@ islr_db = compute_islr_corrected(auto_corr, peak_idx, fs, B);
 mainlobe_width = compute_3db_width_corrected(auto_corr, peak_idx, fs, B);
 papr_db = compute_papr(s_out);
 
-% NEW: 在J函数中使用dB量的PSLR与ISLR
-J = 1 *pslr_db + 1 *islr_db ...
-    + lambda1 * max(0, mainlobe_width - mlw_ham)^2 ...
-    + lambda2 * max(0, papr_db - papr_ham)^2;
+% NEW: 在J函数中给PSLR和ISLR增加权重
+J = w_pslr * pslr_db + w_islr * islr_db ...
+    + lambda1 * max(0, mainlobe_width - mlw_ref)^2 ...
+    + lambda2 * max(0, papr_db - papr_ref)^2;
 
 metrics = struct('pslr_db', pslr_db, 'islr_db', islr_db, ...
                  'mainlobe_width', mainlobe_width, 'papr_db', papr_db);
