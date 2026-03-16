@@ -317,75 +317,75 @@ fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Optimized generalized cosine
 fprintf('Optimized [a0, a1, a2] = [%.4f, %.4f, %.4f], window width = %.4f * B\n', best_coeff(1), best_coeff(2), best_coeff(3), best_width_B_multiple);
 
 %% 步骤7: 随机种子1~50重复优化统计（不影响原有单次绘图）
-num_trials = 50;
-seed_list = 1:num_trials;
-best_params_runs = zeros(num_trials, 4);
-PSLR_runs = zeros(num_trials, 1);
-ISLR_runs = zeros(num_trials, 1);
-mainlobe_runs = zeros(num_trials, 1);
-PAPR_runs = zeros(num_trials, 1);
+%num_trials = 50;
+%seed_list = 1:num_trials;
+%best_params_runs = zeros(num_trials, 4);
+%PSLR_runs = zeros(num_trials, 1);
+%ISLR_runs = zeros(num_trials, 1);
+%mainlobe_runs = zeros(num_trials, 1);
+%PAPR_runs = zeros(num_trials, 1);
 
-fa_opt_mc = fa_opt;
-fa_opt_mc.verbose = false;  % Monte Carlo阶段关闭迭代日志，避免刷屏
+% fa_opt_mc = fa_opt;
+% fa_opt_mc.verbose = false;  % Monte Carlo阶段关闭迭代日志，避免刷屏
 
-for trial_idx = 1:num_trials
-    rng(seed_list(trial_idx));
-    best_param_trial = optimize_generalized_cosine_fa(...
-        G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, ...
-        mainlobe_width_hamming, PAPR_hamming, ...
-        lambda1, lambda2, min_width_B_multiple, max_width_B_multiple, fa_opt_mc, fs, B);
-
-    best_params_runs(trial_idx, :) = best_param_trial;
-
-    coeff_trial = best_param_trial(1:3);
-    width_trial = best_param_trial(4);
-    win_trial_local = build_generalized_cosine_window(L, f_local, coeff_trial, width_trial, B);
-    win_trial = zeros(N_fft, 1);
-    win_trial(f_idx) = win_trial_local;
-    W_trial_k = fftshift(win_trial);
-
-    S_tx_trial_k = S_LFM_k .* (G_tx_k .* W_trial_k);
-    s_tx_trial_time = ifft(S_tx_trial_k, N_fft);
-    S_tx_trial_full = fft(s_tx_trial_time, N_fft);
-    S_tx_trial_with_H = S_tx_trial_full .* H_k;
-    s_tx_trial_with_H_time = ifft(S_tx_trial_with_H, N_fft);
-    s_tx_trial_with_H = s_tx_trial_with_H_time(1:N_pulse);
-    s_tx_trial_with_H = s_tx_trial_with_H / sqrt(sum(abs(s_tx_trial_with_H).^2));
-
-    auto_corr_trial = xcorr(s_tx_trial_with_H, s_tx_trial_with_H);
-    auto_corr_trial = auto_corr_trial / max(abs(auto_corr_trial));
-    peak_idx_trial = ceil(length(auto_corr_trial)/2);
-
-    PSLR_runs(trial_idx) = compute_pslr_corrected(auto_corr_trial, peak_idx_trial, fs, B);
-    ISLR_runs(trial_idx) = compute_islr_corrected(auto_corr_trial, peak_idx_trial, fs, B);
-    mainlobe_runs(trial_idx) = compute_3db_width_corrected(auto_corr_trial, peak_idx_trial, fs, B);
-    PAPR_runs(trial_idx) = compute_papr(s_tx_trial_with_H);
-end
-
-% 统计量
-stats_names = {'PSLR (dB)', 'ISLR (dB)', '3-dB Mainlobe Width (us)', 'PAPR (dB)'};
-stats_mat = [PSLR_runs, ISLR_runs, mainlobe_runs, PAPR_runs];
-mean_vals = mean(stats_mat, 1);
-std_vals = std(stats_mat, 0, 1);
-best_vals = min(stats_mat, [], 1);
-worst_vals = max(stats_mat, [], 1);
-
-fprintf('\n%-28s %-12s %-12s %-12s %-12s\n', 'Metric (50 random seeds)', 'Mean', 'Std', 'Best', 'Worst');
-fprintf('%s\n', repmat('-', 1, 82));
-for k = 1:numel(stats_names)
-    fprintf('%-28s %-12.4f %-12.4f %-12.4f %-12.4f\n', ...
-        stats_names{k}, mean_vals(k), std_vals(k), best_vals(k), worst_vals(k));
-end
-
-% 可视化：箱线图（直观看50次分布）
-figure(5);
-set(gcf, 'Position', [180, 120, 1000, 520]);
-tiledlayout(2,2,'Padding','compact','TileSpacing','compact');
-
-nexttile; boxplot(PSLR_runs); title('PSLR (dB)'); grid on;
-nexttile; boxplot(ISLR_runs); title('ISLR (dB)'); grid on;
-nexttile; boxplot(mainlobe_runs); title('3-dB Mainlobe Width (us)'); grid on;
-nexttile; boxplot(PAPR_runs); title('PAPR (dB)'); grid on;
+% for trial_idx = 1:num_trials
+%     rng(seed_list(trial_idx));
+%     best_param_trial = optimize_generalized_cosine_fa(...
+%         G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, ...
+%         mainlobe_width_hamming, PAPR_hamming, ...
+%         lambda1, lambda2, min_width_B_multiple, max_width_B_multiple, fa_opt_mc, fs, B);
+% 
+%     best_params_runs(trial_idx, :) = best_param_trial;
+% 
+%     coeff_trial = best_param_trial(1:3);
+%     width_trial = best_param_trial(4);
+%     win_trial_local = build_generalized_cosine_window(L, f_local, coeff_trial, width_trial, B);
+%     win_trial = zeros(N_fft, 1);
+%     win_trial(f_idx) = win_trial_local;
+%     W_trial_k = fftshift(win_trial);
+% 
+%     S_tx_trial_k = S_LFM_k .* (G_tx_k .* W_trial_k);
+%     s_tx_trial_time = ifft(S_tx_trial_k, N_fft);
+%     S_tx_trial_full = fft(s_tx_trial_time, N_fft);
+%     S_tx_trial_with_H = S_tx_trial_full .* H_k;
+%     s_tx_trial_with_H_time = ifft(S_tx_trial_with_H, N_fft);
+%     s_tx_trial_with_H = s_tx_trial_with_H_time(1:N_pulse);
+%     s_tx_trial_with_H = s_tx_trial_with_H / sqrt(sum(abs(s_tx_trial_with_H).^2));
+% 
+%     auto_corr_trial = xcorr(s_tx_trial_with_H, s_tx_trial_with_H);
+%     auto_corr_trial = auto_corr_trial / max(abs(auto_corr_trial));
+%     peak_idx_trial = ceil(length(auto_corr_trial)/2);
+% 
+%     PSLR_runs(trial_idx) = compute_pslr_corrected(auto_corr_trial, peak_idx_trial, fs, B);
+%     ISLR_runs(trial_idx) = compute_islr_corrected(auto_corr_trial, peak_idx_trial, fs, B);
+%     mainlobe_runs(trial_idx) = compute_3db_width_corrected(auto_corr_trial, peak_idx_trial, fs, B);
+%     PAPR_runs(trial_idx) = compute_papr(s_tx_trial_with_H);
+% end
+% 
+% % 统计量
+% stats_names = {'PSLR (dB)', 'ISLR (dB)', '3-dB Mainlobe Width (us)', 'PAPR (dB)'};
+% stats_mat = [PSLR_runs, ISLR_runs, mainlobe_runs, PAPR_runs];
+% mean_vals = mean(stats_mat, 1);
+% std_vals = std(stats_mat, 0, 1);
+% best_vals = min(stats_mat, [], 1);
+% worst_vals = max(stats_mat, [], 1);
+% 
+% fprintf('\n%-28s %-12s %-12s %-12s %-12s\n', 'Metric (50 random seeds)', 'Mean', 'Std', 'Best', 'Worst');
+% fprintf('%s\n', repmat('-', 1, 82));
+% for k = 1:numel(stats_names)
+%     fprintf('%-28s %-12.4f %-12.4f %-12.4f %-12.4f\n', ...
+%         stats_names{k}, mean_vals(k), std_vals(k), best_vals(k), worst_vals(k));
+% end
+% 
+% % 可视化：箱线图（直观看50次分布）
+% figure(5);
+% set(gcf, 'Position', [180, 120, 1000, 520]);
+% tiledlayout(2,2,'Padding','compact','TileSpacing','compact');
+% 
+% nexttile; boxplot(PSLR_runs); title('PSLR (dB)'); grid on;
+% nexttile; boxplot(ISLR_runs); title('ISLR (dB)'); grid on;
+% nexttile; boxplot(mainlobe_runs); title('3-dB Mainlobe Width (us)'); grid on;
+% nexttile; boxplot(PAPR_runs); title('PAPR (dB)'); grid on;
 
 %% ===== local functions =====
 function best_param = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B)
