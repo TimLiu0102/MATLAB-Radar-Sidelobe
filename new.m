@@ -119,9 +119,9 @@ PAPR_lfm_ref = compute_papr(s_ideal);
 %% NEW: 萤火虫算法优化
 rng(20);
 lambda1 = 10;
-lambda2 = 30;
-w_pslr = 1;
-w_islr = 1;
+lambda2 = 25;
+w_pslr = 6;
+w_islr = 6;
 fa_opt.pop_size = 30;
 fa_opt.max_iter = 50;
 fa_opt.beta0 = 1;
