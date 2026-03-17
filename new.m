@@ -300,23 +300,15 @@ fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Optimized generalized cosine
 fprintf('Optimized [a0, a1, a2] = [%.4f, %.4f, %.4f], window width = %.4f * B\n', best_coeff(1), best_coeff(2), best_coeff(3), best_width_B_multiple);
 
 %% 步骤6.1: 四个权重灵敏度分析（单因子扰动）
-
 weight_names = {'w_pslr', 'w_islr', 'lambda1', 'lambda2'};
+weight_xlabels = {'w_pslr', 'w_islr', 'lambda_1', 'lambda_2'};
 weight_base = [lambda1, lambda2, w_pslr, w_islr];
-weight_target_col = [3, 4, 1, 2]; % 对应 [lambda1, lambda2, w_pslr, w_islr]
-sweep_values = [1, 5, 10, 15, 20, 25, 30];
+weight_target_col = [3, 4, 1, 2]; % cur_weights = [lambda1, lambda2, w_pslr, w_islr]
+sweep_values = [1, 5, 10, 20, 25];
 
 num_weights = numel(weight_names);
 num_sweeps = numel(sweep_values);
 sens_results = zeros(num_weights*num_sweeps, 10); % [id, sweep, l1, l2, wP, wI, PSLR, ISLR, MLW, PAPR]
-
-weight_names = {'lambda1', 'lambda2', 'w_pslr', 'w_islr'};
-weight_base = [lambda1, lambda2, w_pslr, w_islr];
-scale_list = [0.6, 0.8, 1.0, 1.2, 1.4];
-
-num_weights = numel(weight_names);
-num_scales = numel(scale_list);
-sens_results = zeros(num_weights*num_scales, 10); % [id, scale, l1, l2, wP, wI, PSLR, ISLR, MLW, PAPR]
 
 
 fa_opt_sens = fa_opt;
@@ -326,15 +318,9 @@ fa_opt_sens.verbose = false;
 
 row = 1;
 for weight_idx = 1:num_weights
-
     for sweep_idx = 1:num_sweeps
         cur_weights = weight_base;
         cur_weights(weight_target_col(weight_idx)) = sweep_values(sweep_idx);
-
-    for scale_idx = 1:num_scales
-        cur_weights = weight_base;
-        cur_weights(weight_idx) = weight_base(weight_idx) * scale_list(scale_idx);
-
 
         best_param_sens = optimize_generalized_cosine_fa(...
             G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, ...
@@ -347,10 +333,9 @@ for weight_idx = 1:num_weights
             mainlobe_width_lfm_ref, PAPR_lfm_ref, ...
             cur_weights(1), cur_weights(2), cur_weights(3), cur_weights(4), fs, B);
 
-        sens_results(row, :) = [weight_idx, scale_list(scale_idx), cur_weights, ...
-sens_metrics.pslr_db, sens_metrics.islr_db, sens_metrics.mainlobe_width, sens_metrics.papr_db];
+        sens_results(row, :) = [weight_idx, sweep_values(sweep_idx), cur_weights, ...
+            sens_metrics.pslr_db, sens_metrics.islr_db, sens_metrics.mainlobe_width, sens_metrics.papr_db];
         row = row + 1;
-    end
     end
 end
 
@@ -389,16 +374,10 @@ for weight_idx = 1:num_weights
     ylabel('PAPR (dB) / main-lobe width (\mus)', 'Color', [0.85 0.33 0.10]);
     set(gca, 'YColor', [0.85 0.33 0.10]);
 
-
-    xlabel('Weight value');
+    xlabel(weight_xlabels{weight_idx});
     title([weight_names{weight_idx}, ' sensitivity']);
     grid on;
     set(gca, 'XTick', sweep_values);
-
-    xlabel('Scale factor');
-    title([weight_names{weight_idx}, ' sensitivity']);
-    grid on;
-    set(gca, 'XTick', scale_list);
 
     legend([p1, p2, p3, p4], {'PSLR', 'ISLR', 'PAPR', 'main-lobe width'}, 'Location', 'best');
 end
@@ -417,6 +396,88 @@ for r = 1:size(sens_results, 1)
         sens_results(r,5), sens_results(r,6), sens_results(r,7), sens_results(r,8), ...
         sens_results(r,9), sens_results(r,10));
 end
+
+
+%% 步骤6.2: 不同B、T_pulse（fs=60e6）鲁棒性分析（1x2子图）
+fs_robust = 60e6;
+B_sweep_MHz = [10, 20, 30, 40, 50];
+Tp_sweep_us = [10, 20, 30, 40, 50];
+
+% 图A: 扫描B，固定T_pulse
+T_fix = T_pulse;
+num_B = numel(B_sweep_MHz);
+robust_B = zeros(num_B, 5); % [B_MHz, PSLR_opt, ISLR_opt, MLW_opt, PAPR_opt]
+for i = 1:num_B
+    B_case = B_sweep_MHz(i) * 1e6;
+    case_metrics = run_single_case_metrics(B_case, T_fix, fs_robust, alpha_reg, A_max, ...
+        lambda1, lambda2, w_pslr, w_islr, min_width_B_multiple, max_width_B_multiple, fa_opt_sens);
+    robust_B(i, :) = [B_sweep_MHz(i), case_metrics.pslr_opt, case_metrics.islr_opt, case_metrics.mlw_opt, case_metrics.papr_opt];
+end
+
+% 图B: 扫描T_pulse，固定B
+B_fix = B;
+num_T = numel(Tp_sweep_us);
+robust_T = zeros(num_T, 5); % [Tp_us, PSLR_opt, ISLR_opt, MLW_opt, PAPR_opt]
+for i = 1:num_T
+    T_case = Tp_sweep_us(i) * 1e-6;
+    case_metrics = run_single_case_metrics(B_fix, T_case, fs_robust, alpha_reg, A_max, ...
+        lambda1, lambda2, w_pslr, w_islr, min_width_B_multiple, max_width_B_multiple, fa_opt_sens);
+    robust_T(i, :) = [Tp_sweep_us(i), case_metrics.pslr_opt, case_metrics.islr_opt, case_metrics.mlw_opt, case_metrics.papr_opt];
+end
+
+fprintf('\n===== Robustness analysis A: sweep B (MHz), T_{pulse}=%.1f us, fs=60e6 =====\n', T_fix*1e6);
+fprintf('%-10s %-12s %-12s %-14s %-12s\n', 'B(MHz)', 'PSLR_opt', 'ISLR_opt', 'MLW_opt(us)', 'PAPR_opt');
+fprintf('%s\n', repmat('-', 1, 68));
+for i = 1:size(robust_B,1)
+    fprintf('%-10.1f %-12.3f %-12.3f %-14.4f %-12.3f\n', robust_B(i,1), robust_B(i,2), robust_B(i,3), robust_B(i,4), robust_B(i,5));
+end
+
+fprintf('\n===== Robustness analysis B: sweep T_{pulse} (us), B=%.1f MHz, fs=60e6 =====\n', B_fix/1e6);
+fprintf('%-10s %-12s %-12s %-14s %-12s\n', 'Tp(us)', 'PSLR_opt', 'ISLR_opt', 'MLW_opt(us)', 'PAPR_opt');
+fprintf('%s\n', repmat('-', 1, 68));
+for i = 1:size(robust_T,1)
+    fprintf('%-10.1f %-12.3f %-12.3f %-14.4f %-12.3f\n', robust_T(i,1), robust_T(i,2), robust_T(i,3), robust_T(i,4), robust_T(i,5));
+end
+
+figure(6);
+set(gcf, 'Position', [150, 120, 1280, 460], 'Color', [1 1 1]);
+tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
+
+% 图A：不同B下性能变化
+nexttile;
+yyaxis left;
+p1 = plot(robust_B(:,1), robust_B(:,2), 'o-b', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p2 = plot(robust_B(:,1), robust_B(:,3), 's-r', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('PSLR / ISLR (dB)');
+
+yyaxis right;
+p3 = plot(robust_B(:,1), robust_B(:,4), '^-m', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p4 = plot(robust_B(:,1), robust_B(:,5), 'd-k', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('Mainlobe width (us) / PAPR (dB)');
+
+xlabel('B (MHz)');
+title('A: Performance vs B');
+grid on;
+set(gca, 'XTick', B_sweep_MHz);
+legend([p1 p2 p3 p4], {'PSLR','ISLR','Mainlobe width','PAPR'}, 'Location', 'best');
+
+% 图B：不同T_pulse下性能变化
+nexttile;
+yyaxis left;
+p1 = plot(robust_T(:,1), robust_T(:,2), 'o-b', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p2 = plot(robust_T(:,1), robust_T(:,3), 's-r', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('PSLR / ISLR (dB)');
+
+yyaxis right;
+p3 = plot(robust_T(:,1), robust_T(:,4), '^-m', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p4 = plot(robust_T(:,1), robust_T(:,5), 'd-k', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('Mainlobe width (us) / PAPR (dB)');
+
+xlabel('T_{pulse} (us)');
+title('B: Performance vs T_{pulse}');
+grid on;
+set(gca, 'XTick', Tp_sweep_us);
+legend([p1 p2 p3 p4], {'PSLR','ISLR','Mainlobe width','PAPR'}, 'Location', 'best');
 
 %% 步骤7: 随机种子1~50重复优化统计（不影响原有单次绘图）
 %num_trials = 50;
@@ -613,6 +674,91 @@ end
 
 width_B_multiple = max(min_width_B_multiple, min(max_width_B_multiple, width_B_multiple));
 param = [coeff, width_B_multiple];
+end
+
+
+function case_metrics = run_single_case_metrics(B_case, T_case, fs_case, alpha_reg, A_max, lambda1, lambda2, w_pslr, w_islr, min_width_B_multiple, max_width_B_multiple, fa_opt_case)
+N_pulse_case = round(T_case * fs_case);
+N_fft_case = 2^nextpow2(N_pulse_case * 8);
+freq_case = (-N_fft_case/2:N_fft_case/2-1)' * (fs_case/N_fft_case);
+
+f_center_idx_case = find(abs(freq_case) <= B_case/2);
+H_mag_case = zeros(N_fft_case, 1);
+H_mag_case(f_center_idx_case) = 0.7 + 0.4*cos(2*pi*freq_case(f_center_idx_case)/B_case*6) .* ...
+                               exp(-(freq_case(f_center_idx_case)/(0.5*B_case)).^2) + ...
+                               0.1*sin(2*pi*freq_case(f_center_idx_case)/B_case*3);
+H_phase_case = zeros(N_fft_case, 1);
+H_phase_case(f_center_idx_case) = 0.4*pi*(freq_case(f_center_idx_case)/B_case).^3 + ...
+                                  0.3*pi*sin(2*pi*freq_case(f_center_idx_case)/B_case*5) + ...
+                                  0.05*pi*(freq_case(f_center_idx_case)/B_case).^2;
+H_k_case = fftshift(H_mag_case .* exp(1j*H_phase_case));
+
+t_case = (-N_pulse_case/2:N_pulse_case/2-1)' / fs_case;
+k_chirp_case = B_case / T_case;
+s_lfm_case = exp(1j * pi * k_chirp_case * t_case.^2);
+s_lfm_padded_case = zeros(N_fft_case, 1);
+s_lfm_padded_case(1:N_pulse_case) = s_lfm_case;
+S_LFM_case = fft(s_lfm_padded_case, N_fft_case);
+
+epsilon_case = alpha_reg * mean(abs(H_k_case .* S_LFM_case));
+G_tx_case = S_LFM_case ./ (H_k_case .* S_LFM_case + epsilon_case);
+G_mag_case = abs(G_tx_case);
+if max(G_mag_case) > A_max
+    G_tx_case = G_tx_case ./ max(1, G_mag_case / A_max);
+end
+
+f_idx_case = find(abs(freq_case) <= B_case);
+f_local_case = freq_case(f_idx_case);
+L_case = length(f_idx_case);
+
+s_ideal_case = s_lfm_case / sqrt(sum(abs(s_lfm_case).^2));
+S_no_case = S_LFM_case .* H_k_case;
+s_no_time_case = ifft(S_no_case, N_fft_case);
+s_no_case = s_no_time_case(1:N_pulse_case);
+s_no_case = s_no_case / sqrt(sum(abs(s_no_case).^2));
+
+auto_corr_ideal_case = xcorr(s_ideal_case, s_ideal_case);
+auto_corr_ideal_case = auto_corr_ideal_case / max(abs(auto_corr_ideal_case));
+peak_idx_ideal_case = ceil(length(auto_corr_ideal_case)/2);
+mlw_ref_case = compute_3db_width_corrected(auto_corr_ideal_case, peak_idx_ideal_case, fs_case, B_case);
+papr_ref_case = compute_papr(s_ideal_case);
+
+best_param_case = optimize_generalized_cosine_fa( ...
+    G_tx_case, S_LFM_case, H_k_case, N_fft_case, N_pulse_case, f_idx_case, f_local_case, ...
+    mlw_ref_case, papr_ref_case, lambda1, lambda2, w_pslr, w_islr, ...
+    min_width_B_multiple, max_width_B_multiple, fa_opt_case, fs_case, B_case);
+
+coeff_case = best_param_case(1:3);
+width_case = best_param_case(4);
+win_local_case = build_generalized_cosine_window(L_case, f_local_case, coeff_case, width_case, B_case);
+win_case = zeros(N_fft_case, 1);
+win_case(f_idx_case) = win_local_case;
+W_case = fftshift(win_case);
+
+S_tx_opt_case = S_LFM_case .* (G_tx_case .* W_case);
+s_tx_opt_time_case = ifft(S_tx_opt_case, N_fft_case);
+S_opt_out_case = fft(s_tx_opt_time_case, N_fft_case) .* H_k_case;
+s_opt_out_case = ifft(S_opt_out_case, N_fft_case);
+s_opt_case = s_opt_out_case(1:N_pulse_case);
+s_opt_case = s_opt_case / sqrt(sum(abs(s_opt_case).^2));
+
+auto_corr_no_case = xcorr(s_no_case, s_no_case);
+auto_corr_no_case = auto_corr_no_case / max(abs(auto_corr_no_case));
+peak_idx_no_case = ceil(length(auto_corr_no_case)/2);
+
+auto_corr_opt_case = xcorr(s_opt_case, s_opt_case);
+auto_corr_opt_case = auto_corr_opt_case / max(abs(auto_corr_opt_case));
+peak_idx_opt_case = ceil(length(auto_corr_opt_case)/2);
+
+case_metrics = struct( ...
+    'pslr_no_comp', compute_pslr_corrected(auto_corr_no_case, peak_idx_no_case, fs_case, B_case), ...
+    'pslr_opt', compute_pslr_corrected(auto_corr_opt_case, peak_idx_opt_case, fs_case, B_case), ...
+    'islr_no_comp', compute_islr_corrected(auto_corr_no_case, peak_idx_no_case, fs_case, B_case), ...
+    'islr_opt', compute_islr_corrected(auto_corr_opt_case, peak_idx_opt_case, fs_case, B_case), ...
+    'mlw_no_comp', compute_3db_width_corrected(auto_corr_no_case, peak_idx_no_case, fs_case, B_case), ...
+    'mlw_opt', compute_3db_width_corrected(auto_corr_opt_case, peak_idx_opt_case, fs_case, B_case), ...
+    'papr_no_comp', compute_papr(s_no_case), ...
+    'papr_opt', compute_papr(s_opt_case));
 end
 
 %% 修正后的辅助函数
