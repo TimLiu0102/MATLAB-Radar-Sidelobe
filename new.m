@@ -300,23 +300,15 @@ fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Optimized generalized cosine
 fprintf('Optimized [a0, a1, a2] = [%.4f, %.4f, %.4f], window width = %.4f * B\n', best_coeff(1), best_coeff(2), best_coeff(3), best_width_B_multiple);
 
 %% 步骤6.1: 四个权重灵敏度分析（单因子扰动）
-
 weight_names = {'w_pslr', 'w_islr', 'lambda1', 'lambda2'};
+weight_xlabels = {'w_pslr', 'w_islr', 'lambda_1', 'lambda_2'};
 weight_base = [lambda1, lambda2, w_pslr, w_islr];
-weight_target_col = [3, 4, 1, 2]; % 对应 [lambda1, lambda2, w_pslr, w_islr]
-sweep_values = [1, 5, 10, 15, 20, 25, 30];
+weight_target_col = [3, 4, 1, 2]; % cur_weights = [lambda1, lambda2, w_pslr, w_islr]
+sweep_values = [1, 5, 10, 20, 25];
 
 num_weights = numel(weight_names);
 num_sweeps = numel(sweep_values);
 sens_results = zeros(num_weights*num_sweeps, 10); % [id, sweep, l1, l2, wP, wI, PSLR, ISLR, MLW, PAPR]
-
-weight_names = {'lambda1', 'lambda2', 'w_pslr', 'w_islr'};
-weight_base = [lambda1, lambda2, w_pslr, w_islr];
-scale_list = [0.6, 0.8, 1.0, 1.2, 1.4];
-
-num_weights = numel(weight_names);
-num_scales = numel(scale_list);
-sens_results = zeros(num_weights*num_scales, 10); % [id, scale, l1, l2, wP, wI, PSLR, ISLR, MLW, PAPR]
 
 
 fa_opt_sens = fa_opt;
@@ -326,15 +318,9 @@ fa_opt_sens.verbose = false;
 
 row = 1;
 for weight_idx = 1:num_weights
-
     for sweep_idx = 1:num_sweeps
         cur_weights = weight_base;
         cur_weights(weight_target_col(weight_idx)) = sweep_values(sweep_idx);
-
-    for scale_idx = 1:num_scales
-        cur_weights = weight_base;
-        cur_weights(weight_idx) = weight_base(weight_idx) * scale_list(scale_idx);
-
 
         best_param_sens = optimize_generalized_cosine_fa(...
             G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, ...
@@ -347,10 +333,9 @@ for weight_idx = 1:num_weights
             mainlobe_width_lfm_ref, PAPR_lfm_ref, ...
             cur_weights(1), cur_weights(2), cur_weights(3), cur_weights(4), fs, B);
 
-        sens_results(row, :) = [weight_idx, scale_list(scale_idx), cur_weights, ...
-sens_metrics.pslr_db, sens_metrics.islr_db, sens_metrics.mainlobe_width, sens_metrics.papr_db];
+        sens_results(row, :) = [weight_idx, sweep_values(sweep_idx), cur_weights, ...
+            sens_metrics.pslr_db, sens_metrics.islr_db, sens_metrics.mainlobe_width, sens_metrics.papr_db];
         row = row + 1;
-    end
     end
 end
 
@@ -389,16 +374,10 @@ for weight_idx = 1:num_weights
     ylabel('PAPR (dB) / main-lobe width (\mus)', 'Color', [0.85 0.33 0.10]);
     set(gca, 'YColor', [0.85 0.33 0.10]);
 
-
-    xlabel('Weight value');
+    xlabel(weight_xlabels{weight_idx});
     title([weight_names{weight_idx}, ' sensitivity']);
     grid on;
     set(gca, 'XTick', sweep_values);
-
-    xlabel('Scale factor');
-    title([weight_names{weight_idx}, ' sensitivity']);
-    grid on;
-    set(gca, 'XTick', scale_list);
 
     legend([p1, p2, p3, p4], {'PSLR', 'ISLR', 'PAPR', 'main-lobe width'}, 'Location', 'best');
 end
