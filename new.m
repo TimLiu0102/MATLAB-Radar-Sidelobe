@@ -336,27 +336,46 @@ for weight_idx = 1:num_weights
     end
 end
 
-% 绘图：四权重灵敏度曲线
+% 绘图：将原四个子图改为示例风格（每个权重一个双Y轴子图）
 figure(5);
-set(gcf, 'Position', [140, 120, 1200, 700]);
+set(gcf, 'Position', [120, 90, 1250, 760], 'Color', [0.94 0.94 0.94]);
 tiledlayout(2,2,'Padding','compact','TileSpacing','compact');
-metric_titles = {'PSLR (dB)', 'ISLR (dB)', '3-dB Mainlobe Width (\mus)', 'PAPR (dB)'};
-metric_cols = 7:10;
-line_styles = {'r-o', 'b-s', 'm-^', 'k-d'};
 
-for m = 1:4
+for weight_idx = 1:num_weights
     nexttile;
-    for weight_idx = 1:num_weights
-        sel = sens_results(:,1) == weight_idx;
-        x_val = sens_results(sel,2);
-        y_val = sens_results(sel,metric_cols(m));
-        plot(x_val, y_val, line_styles{weight_idx}, 'LineWidth', 1.2, 'MarkerSize', 5); hold on;
-    end
-    xlabel('Scale factor relative to baseline');
-    ylabel(metric_titles{m});
-    title(['Sensitivity of ', metric_titles{m}]);
-    legend(weight_names, 'Location', 'best');
+    ax = gca;
+    ax.Color = [0.94 0.94 0.94];
+    ax.FontSize = 12;
+    sel = sens_results(:,1) == weight_idx;
+
+    x_val = sens_results(sel,2);
+    [x_val, order_idx] = sort(x_val);
+    y_pslr = sens_results(sel,7); y_pslr = y_pslr(order_idx);
+    y_islr = sens_results(sel,8); y_islr = y_islr(order_idx);
+    y_mlw = sens_results(sel,9); y_mlw = y_mlw(order_idx);
+    y_papr = sens_results(sel,10); y_papr = y_papr(order_idx);
+
+    yyaxis left;
+    p1 = plot(x_val, y_pslr, 'o-', 'Color', 'b', 'LineWidth', 1.6, ...
+        'MarkerSize', 7, 'MarkerFaceColor', 'none'); hold on;
+    p2 = plot(x_val, y_islr, 's-', 'Color', 'r', 'LineWidth', 1.6, ...
+        'MarkerSize', 6, 'MarkerFaceColor', 'none');
+    ylabel('PSLR / ISLR (dB)', 'Color', 'b');
+    set(gca, 'YColor', 'b');
+
+    yyaxis right;
+    p3 = plot(x_val, y_papr, 'd-', 'Color', 'k', 'LineWidth', 1.6, ...
+        'MarkerSize', 7, 'MarkerFaceColor', 'none'); hold on;
+    p4 = plot(x_val, y_mlw, '^-', 'Color', 'm', 'LineWidth', 1.6, ...
+        'MarkerSize', 7, 'MarkerFaceColor', 'none');
+    ylabel('PAPR (dB) / main-lobe width (\mus)', 'Color', [0.85 0.33 0.10]);
+    set(gca, 'YColor', [0.85 0.33 0.10]);
+
+    xlabel('Scale factor');
+    title([weight_names{weight_idx}, ' sensitivity']);
     grid on;
+    set(gca, 'XTick', scale_list);
+    legend([p1, p2, p3, p4], {'PSLR', 'ISLR', 'PAPR', 'main-lobe width'}, 'Location', 'best');
 end
 
 % 命令行输出：灵敏度结果表
