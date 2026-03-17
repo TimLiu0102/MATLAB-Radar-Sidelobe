@@ -299,6 +299,99 @@ fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Hamming window', PSLR_hammin
 fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Optimized generalized cosine window', PSLR_opt, ISLR_opt, mainlobe_width_opt, PAPR_opt);
 fprintf('Optimized [a0, a1, a2] = [%.4f, %.4f, %.4f], window width = %.4f * B\n', best_coeff(1), best_coeff(2), best_coeff(3), best_width_B_multiple);
 
+%% 步骤6.1: 四个权重灵敏度分析（单因子扰动）
+weight_names = {'w_pslr', 'w_islr', 'lambda1', 'lambda2'};
+weight_base = [lambda1, lambda2, w_pslr, w_islr];
+weight_target_col = [3, 4, 1, 2]; % 对应 [lambda1, lambda2, w_pslr, w_islr]
+sweep_values = [1, 5, 10, 15, 20, 25, 30];
+
+num_weights = numel(weight_names);
+num_sweeps = numel(sweep_values);
+sens_results = zeros(num_weights*num_sweeps, 10); % [id, sweep, l1, l2, wP, wI, PSLR, ISLR, MLW, PAPR]
+
+fa_opt_sens = fa_opt;
+fa_opt_sens.pop_size = 18;
+fa_opt_sens.max_iter = 25;
+fa_opt_sens.verbose = false;
+
+row = 1;
+for weight_idx = 1:num_weights
+    for sweep_idx = 1:num_sweeps
+        cur_weights = weight_base;
+        cur_weights(weight_target_col(weight_idx)) = sweep_values(sweep_idx);
+
+        best_param_sens = optimize_generalized_cosine_fa(...
+            G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, ...
+            mainlobe_width_lfm_ref, PAPR_lfm_ref, ...
+            cur_weights(1), cur_weights(2), cur_weights(3), cur_weights(4), ...
+            min_width_B_multiple, max_width_B_multiple, fa_opt_sens, fs, B);
+
+        [~, sens_metrics] = evaluate_window_objective(best_param_sens, ...
+            G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, ...
+            mainlobe_width_lfm_ref, PAPR_lfm_ref, ...
+            cur_weights(1), cur_weights(2), cur_weights(3), cur_weights(4), fs, B);
+
+        sens_results(row, :) = [weight_idx, sweep_values(sweep_idx), cur_weights, ...
+            sens_metrics.pslr_db, sens_metrics.islr_db, sens_metrics.mainlobe_width, sens_metrics.papr_db];
+        row = row + 1;
+    end
+end
+
+% 绘图：将原四个子图改为示例风格（每个权重一个双Y轴子图）
+figure(5);
+set(gcf, 'Position', [120, 90, 1250, 760], 'Color', [0.94 0.94 0.94]);
+tiledlayout(2,2,'Padding','compact','TileSpacing','compact');
+
+for weight_idx = 1:num_weights
+    nexttile;
+    ax = gca;
+    ax.Color = [0.94 0.94 0.94];
+    ax.FontSize = 12;
+    sel = sens_results(:,1) == weight_idx;
+
+    x_val = sens_results(sel,2);
+    [x_val, order_idx] = sort(x_val);
+    y_pslr = sens_results(sel,7); y_pslr = y_pslr(order_idx);
+    y_islr = sens_results(sel,8); y_islr = y_islr(order_idx);
+    y_mlw = sens_results(sel,9); y_mlw = y_mlw(order_idx);
+    y_papr = sens_results(sel,10); y_papr = y_papr(order_idx);
+
+    yyaxis left;
+    p1 = plot(x_val, y_pslr, 'o-', 'Color', 'b', 'LineWidth', 1.6, ...
+        'MarkerSize', 7, 'MarkerFaceColor', 'none'); hold on;
+    p2 = plot(x_val, y_islr, 's-', 'Color', 'r', 'LineWidth', 1.6, ...
+        'MarkerSize', 6, 'MarkerFaceColor', 'none');
+    ylabel('PSLR / ISLR (dB)', 'Color', 'b');
+    set(gca, 'YColor', 'b');
+
+    yyaxis right;
+    p3 = plot(x_val, y_papr, 'd-', 'Color', 'k', 'LineWidth', 1.6, ...
+        'MarkerSize', 7, 'MarkerFaceColor', 'none'); hold on;
+    p4 = plot(x_val, y_mlw, '^-', 'Color', 'm', 'LineWidth', 1.6, ...
+        'MarkerSize', 7, 'MarkerFaceColor', 'none');
+    ylabel('PAPR (dB) / main-lobe width (\mus)', 'Color', [0.85 0.33 0.10]);
+    set(gca, 'YColor', [0.85 0.33 0.10]);
+
+    xlabel('Weight value');
+    title([weight_names{weight_idx}, ' sensitivity']);
+    grid on;
+    set(gca, 'XTick', sweep_values);
+    legend([p1, p2, p3, p4], {'PSLR', 'ISLR', 'PAPR', 'main-lobe width'}, 'Location', 'best');
+end
+
+% 命令行输出：灵敏度结果表
+fprintf('\n===== Sensitivity analysis for four weights =====\n');
+fprintf('%-10s %-8s %-10s %-10s %-10s %-10s %-11s %-11s %-12s %-10s\n', ...
+    'Weight', 'Value', 'lambda1', 'lambda2', 'w_pslr', 'w_islr', 'PSLR(dB)', 'ISLR(dB)', 'Mainlobe(us)', 'PAPR(dB)');
+fprintf('%s\n', repmat('-', 1, 118));
+for r = 1:size(sens_results, 1)
+    idx = sens_results(r,1);
+    fprintf('%-10s %-8.2f %-10.3f %-10.3f %-10.3f %-10.3f %-11.3f %-11.3f %-12.4f %-10.3f\n', ...
+        weight_names{idx}, sens_results(r,2), sens_results(r,3), sens_results(r,4), ...
+        sens_results(r,5), sens_results(r,6), sens_results(r,7), sens_results(r,8), ...
+        sens_results(r,9), sens_results(r,10));
+end
+
 %% 步骤7: 随机种子1~50重复优化统计（不影响原有单次绘图）
 %num_trials = 50;
 %seed_list = 1:num_trials;
