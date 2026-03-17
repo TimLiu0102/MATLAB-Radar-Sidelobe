@@ -299,6 +299,79 @@ fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Hamming window', PSLR_hammin
 fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Optimized generalized cosine window', PSLR_opt, ISLR_opt, mainlobe_width_opt, PAPR_opt);
 fprintf('Optimized [a0, a1, a2] = [%.4f, %.4f, %.4f], window width = %.4f * B\n', best_coeff(1), best_coeff(2), best_coeff(3), best_width_B_multiple);
 
+%% 步骤6.1: 四个权重灵敏度分析（单因子扰动）
+weight_names = {'lambda1', 'lambda2', 'w_pslr', 'w_islr'};
+weight_base = [lambda1, lambda2, w_pslr, w_islr];
+scale_list = [0.6, 0.8, 1.0, 1.2, 1.4];
+
+num_weights = numel(weight_names);
+num_scales = numel(scale_list);
+sens_results = zeros(num_weights*num_scales, 10); % [id, scale, l1, l2, wP, wI, PSLR, ISLR, MLW, PAPR]
+
+fa_opt_sens = fa_opt;
+fa_opt_sens.pop_size = 18;
+fa_opt_sens.max_iter = 25;
+fa_opt_sens.verbose = false;
+
+row = 1;
+for weight_idx = 1:num_weights
+    for scale_idx = 1:num_scales
+        cur_weights = weight_base;
+        cur_weights(weight_idx) = weight_base(weight_idx) * scale_list(scale_idx);
+
+        best_param_sens = optimize_generalized_cosine_fa(...
+            G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, ...
+            mainlobe_width_lfm_ref, PAPR_lfm_ref, ...
+            cur_weights(1), cur_weights(2), cur_weights(3), cur_weights(4), ...
+            min_width_B_multiple, max_width_B_multiple, fa_opt_sens, fs, B);
+
+        [~, sens_metrics] = evaluate_window_objective(best_param_sens, ...
+            G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, ...
+            mainlobe_width_lfm_ref, PAPR_lfm_ref, ...
+            cur_weights(1), cur_weights(2), cur_weights(3), cur_weights(4), fs, B);
+
+        sens_results(row, :) = [weight_idx, scale_list(scale_idx), cur_weights, ...
+            sens_metrics.pslr_db, sens_metrics.islr_db, sens_metrics.mainlobe_width, sens_metrics.papr_db];
+        row = row + 1;
+    end
+end
+
+% 绘图：四权重灵敏度曲线
+figure(5);
+set(gcf, 'Position', [140, 120, 1200, 700]);
+tiledlayout(2,2,'Padding','compact','TileSpacing','compact');
+metric_titles = {'PSLR (dB)', 'ISLR (dB)', '3-dB Mainlobe Width (\mus)', 'PAPR (dB)'};
+metric_cols = 7:10;
+line_styles = {'r-o', 'b-s', 'm-^', 'k-d'};
+
+for m = 1:4
+    nexttile;
+    for weight_idx = 1:num_weights
+        sel = sens_results(:,1) == weight_idx;
+        x_val = sens_results(sel,2);
+        y_val = sens_results(sel,metric_cols(m));
+        plot(x_val, y_val, line_styles{weight_idx}, 'LineWidth', 1.2, 'MarkerSize', 5); hold on;
+    end
+    xlabel('Scale factor relative to baseline');
+    ylabel(metric_titles{m});
+    title(['Sensitivity of ', metric_titles{m}]);
+    legend(weight_names, 'Location', 'best');
+    grid on;
+end
+
+% 命令行输出：灵敏度结果表
+fprintf('\n===== Sensitivity analysis for four weights =====\n');
+fprintf('%-10s %-8s %-10s %-10s %-10s %-10s %-11s %-11s %-12s %-10s\n', ...
+    'Weight', 'Scale', 'lambda1', 'lambda2', 'w_pslr', 'w_islr', 'PSLR(dB)', 'ISLR(dB)', 'Mainlobe(us)', 'PAPR(dB)');
+fprintf('%s\n', repmat('-', 1, 118));
+for r = 1:size(sens_results, 1)
+    idx = sens_results(r,1);
+    fprintf('%-10s %-8.2f %-10.3f %-10.3f %-10.3f %-10.3f %-11.3f %-11.3f %-12.4f %-10.3f\n', ...
+        weight_names{idx}, sens_results(r,2), sens_results(r,3), sens_results(r,4), ...
+        sens_results(r,5), sens_results(r,6), sens_results(r,7), sens_results(r,8), ...
+        sens_results(r,9), sens_results(r,10));
+end
+
 %% 步骤7: 随机种子1~50重复优化统计（不影响原有单次绘图）
 %num_trials = 50;
 %seed_list = 1:num_trials;
