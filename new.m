@@ -398,6 +398,7 @@ for r = 1:size(sens_results, 1)
 end
 
 
+<<<<<<< codex/set-sensitivity-analysis-order-and-labels-gz9cex
 %% 步骤6.2: 不同B、T_pulse（fs=60e6）鲁棒性分析（1x2子图）
 fs_robust = 60e6;
 B_sweep_MHz = [10, 20, 30, 40, 50];
@@ -478,6 +479,79 @@ title('B: Performance vs T_{pulse}');
 grid on;
 set(gca, 'XTick', Tp_sweep_us);
 legend([p1 p2 p3 p4], {'PSLR','ISLR','Mainlobe width','PAPR'}, 'Location', 'best');
+=======
+%% 步骤6.2: 不同B、T_pulse（fs=60e6）鲁棒性分析
+B_list = [15e6, 20e6, 25e6];
+T_pulse_list = [30e-6, 50e-6, 70e-6];
+fs_robust = 60e6;
+
+num_B = numel(B_list);
+num_T = numel(T_pulse_list);
+robust_results = zeros(num_B*num_T, 11); % [id, B_MHz, T_us, PSLR0, PSLR_opt, ISLR0, ISLR_opt, MLW0, MLW_opt, PAPR0, PAPR_opt]
+
+fa_opt_robust = fa_opt;
+fa_opt_robust.pop_size = 18;
+fa_opt_robust.max_iter = 25;
+fa_opt_robust.verbose = false;
+
+row_robust = 1;
+for b_idx = 1:num_B
+    for t_idx = 1:num_T
+        B_case = B_list(b_idx);
+        T_case = T_pulse_list(t_idx);
+
+        case_metrics = run_single_case_metrics(B_case, T_case, fs_robust, alpha_reg, A_max, ...
+            lambda1, lambda2, w_pslr, w_islr, min_width_B_multiple, max_width_B_multiple, fa_opt_robust);
+
+        robust_results(row_robust, :) = [row_robust, B_case/1e6, T_case*1e6, ...
+            case_metrics.pslr_no_comp, case_metrics.pslr_opt, ...
+            case_metrics.islr_no_comp, case_metrics.islr_opt, ...
+            case_metrics.mlw_no_comp, case_metrics.mlw_opt, ...
+            case_metrics.papr_no_comp, case_metrics.papr_opt];
+        row_robust = row_robust + 1;
+    end
+end
+
+fprintf('\n===== Robustness analysis across different B and T_{pulse} (fs=60e6) =====\n');
+fprintf('%-4s %-8s %-10s %-12s %-12s %-12s %-12s %-12s %-12s %-12s %-12s\n', ...
+    'ID', 'B(MHz)', 'T(us)', 'PSLR_no', 'PSLR_opt', 'ISLR_no', 'ISLR_opt', 'MLW_no', 'MLW_opt', 'PAPR_no', 'PAPR_opt');
+fprintf('%s\n', repmat('-', 1, 124));
+for r = 1:size(robust_results, 1)
+    fprintf('%-4.0f %-8.2f %-10.2f %-12.3f %-12.3f %-12.3f %-12.3f %-12.4f %-12.4f %-12.3f %-12.3f\n', ...
+        robust_results(r,1), robust_results(r,2), robust_results(r,3), robust_results(r,4), robust_results(r,5), ...
+        robust_results(r,6), robust_results(r,7), robust_results(r,8), robust_results(r,9), robust_results(r,10), robust_results(r,11));
+end
+
+figure(6);
+set(gcf, 'Position', [150, 100, 1200, 620], 'Color', [1 1 1]);
+tiledlayout(2,2,'Padding','compact','TileSpacing','compact');
+
+scenario_id = robust_results(:,1);
+
+nexttile;
+plot(scenario_id, robust_results(:,4), 'ro--', 'LineWidth', 1.2); hold on;
+plot(scenario_id, robust_results(:,5), 'bo-', 'LineWidth', 1.5);
+xlabel('Scenario ID'); ylabel('PSLR (dB)'); title('PSLR robustness'); grid on;
+legend('No compensation', 'Optimized', 'Location', 'best');
+
+nexttile;
+plot(scenario_id, robust_results(:,6), 'ro--', 'LineWidth', 1.2); hold on;
+plot(scenario_id, robust_results(:,7), 'bo-', 'LineWidth', 1.5);
+xlabel('Scenario ID'); ylabel('ISLR (dB)'); title('ISLR robustness'); grid on;
+legend('No compensation', 'Optimized', 'Location', 'best');
+
+nexttile;
+plot(scenario_id, robust_results(:,8), 'ro--', 'LineWidth', 1.2); hold on;
+plot(scenario_id, robust_results(:,9), 'bo-', 'LineWidth', 1.5);
+xlabel('Scenario ID'); ylabel('3-dB mainlobe width (us)'); title('Mainlobe robustness'); grid on;
+legend('No compensation', 'Optimized', 'Location', 'best');
+
+nexttile;
+plot(scenario_id, robust_results(:,10), 'ro--', 'LineWidth', 1.2); hold on;
+plot(scenario_id, robust_results(:,11), 'bo-', 'LineWidth', 1.5);
+xlabel('Scenario ID'); ylabel('PAPR (dB)'); title('PAPR robustness'); grid on;
+legend('No compensation', 'Optimized', 'Location', 'best');
+>>>>>>> master
 
 %% 步骤7: 随机种子1~50重复优化统计（不影响原有单次绘图）
 %num_trials = 50;
