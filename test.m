@@ -382,7 +382,129 @@ fprintf('\nPAPR - 理想LFM: %.2f dB\n', PAPR_ideal);
 fprintf('PAPR - 无预补偿: %.2f dB\n', PAPR_no_comp);
 fprintf('PAPR - 有预补偿: %.2f dB（增加 %.2f dB）\n', PAPR_with_comp, PAPR_with_comp - PAPR_ideal);
 
+
+%% 步骤10: 不同B、T_pulse（fs=60e6）鲁棒性分析（1x2子图）
+fs_robust = 60e6;
+B_sweep_MHz = [10, 20, 30, 40];
+Tp_sweep_us = [10, 20, 30, 40];
+
+% 图A: 扫描B，固定T_pulse
+T_fix = T_pulse;
+num_B = numel(B_sweep_MHz);
+robust_B = zeros(num_B, 5); % [B_MHz, PSLR, ISLR, MLW, PAPR]
+for i = 1:num_B
+    B_case = B_sweep_MHz(i) * 1e6;
+    case_metrics = run_single_case_metrics_test(B_case, T_fix, fs_robust, alpha_reg, A_max);
+    robust_B(i, :) = [B_sweep_MHz(i), case_metrics.pslr_with_comp, case_metrics.islr_with_comp, ...
+        case_metrics.mlw_with_comp, case_metrics.papr_with_comp];
+end
+
+% 图B: 扫描T_pulse，固定B
+B_fix = B;
+num_T = numel(Tp_sweep_us);
+robust_T = zeros(num_T, 5); % [Tp_us, PSLR, ISLR, MLW, PAPR]
+for i = 1:num_T
+    T_case = Tp_sweep_us(i) * 1e-6;
+    case_metrics = run_single_case_metrics_test(B_fix, T_case, fs_robust, alpha_reg, A_max);
+    robust_T(i, :) = [Tp_sweep_us(i), case_metrics.pslr_with_comp, case_metrics.islr_with_comp, ...
+        case_metrics.mlw_with_comp, case_metrics.papr_with_comp];
+end
+
+figure;
+set(gcf, 'Position', [150, 120, 1280, 460], 'Color', [1 1 1]);
+tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
+
+% 图A：不同B下性能变化
+nexttile;
+yyaxis left;
+p1 = plot(robust_B(:,1), robust_B(:,2), 'o-b', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p2 = plot(robust_B(:,1), robust_B(:,3), 's-r', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('PSLR / ISLR (dB)');
+
+yyaxis right;
+p3 = plot(robust_B(:,1), robust_B(:,4), '^-m', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p4 = plot(robust_B(:,1), robust_B(:,5), 'd-k', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('Mainlobe width (us) / PAPR (dB)');
+
+xlabel('B (MHz)');
+title('A: Performance vs B');
+grid on;
+set(gca, 'XTick', B_sweep_MHz);
+legend([p1 p2 p3 p4], {'PSLR','ISLR','Mainlobe width','PAPR'}, 'Location', 'best');
+
+% 图B：不同T_pulse下性能变化
+nexttile;
+yyaxis left;
+p1 = plot(robust_T(:,1), robust_T(:,2), 'o-b', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p2 = plot(robust_T(:,1), robust_T(:,3), 's-r', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('PSLR / ISLR (dB)');
+
+yyaxis right;
+p3 = plot(robust_T(:,1), robust_T(:,4), '^-m', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p4 = plot(robust_T(:,1), robust_T(:,5), 'd-k', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('Mainlobe width (us) / PAPR (dB)');
+
+xlabel('T_{pulse} (us)');
+title('B: Performance vs T_{pulse}');
+grid on;
+set(gca, 'XTick', Tp_sweep_us);
+legend([p1 p2 p3 p4], {'PSLR','ISLR','Mainlobe width','PAPR'}, 'Location', 'best');
+
 %% 修正后的辅助函数
+
+function metrics = run_single_case_metrics_test(B, T_pulse, fs, alpha_reg, A_max)
+N_pulse = round(T_pulse * fs);
+N_fft = 2^nextpow2(N_pulse * 8);
+freq = (-N_fft/2:N_fft/2-1)' * (fs/N_fft);
+f_center_idx = find(abs(freq)<=B/2);
+
+H_mag = zeros(N_fft, 1);
+H_mag(f_center_idx) = 0.7 + 0.4*cos(2*pi*freq(f_center_idx)/B*6) .* ...
+                      exp(-(freq(f_center_idx)/(0.5*B)).^2) + ...
+                      0.1*sin(2*pi*freq(f_center_idx)/B*3);
+H_phase = zeros(N_fft, 1);
+H_phase(f_center_idx) = 0.4*pi*(freq(f_center_idx)/B).^3 + ...
+                        0.3*pi*sin(2*pi*freq(f_center_idx)/B*5) + ...
+                        0.05*pi*(freq(f_center_idx)/B).^2;
+H_k = fftshift(H_mag .* exp(1j*H_phase));
+
+t = (-N_pulse/2:N_pulse/2-1)' / fs;
+k_chirp = B / T_pulse;
+s_lfm = exp(1j * pi * k_chirp * t.^2);
+s_lfm_padded = zeros(N_fft, 1);
+s_lfm_padded(1:N_pulse) = s_lfm;
+S_LFM_k = fft(s_lfm_padded, N_fft);
+R_k = S_LFM_k;
+
+epsilon = alpha_reg / mean(abs(H_k .* S_LFM_k));
+G_tx_k = R_k ./ (H_k .* S_LFM_k + epsilon);
+G_tx_mag = abs(G_tx_k);
+if max(G_tx_mag) > A_max
+    G_tx_k = G_tx_k ./ max(1, G_tx_mag/A_max);
+end
+
+f_idx = find(abs(freq)<=B);
+hamming_window = zeros(N_fft, 1);
+hamming_window(f_idx) = hamming(length(f_idx));
+W_k = fftshift(hamming_window);
+
+S_tx_k = S_LFM_k .* (G_tx_k .* W_k);
+s_tx_time = ifft(S_tx_k, N_fft);
+S_tx_with_H = fft(s_tx_time, N_fft) .* H_k;
+s_tx_with_H_time = ifft(S_tx_with_H, N_fft);
+s_tx_with_H_pulse = s_tx_with_H_time(1:N_pulse);
+s_tx_with_H_pulse = s_tx_with_H_pulse / sqrt(sum(abs(s_tx_with_H_pulse).^2));
+
+auto_corr = xcorr(s_tx_with_H_pulse, s_tx_with_H_pulse);
+auto_corr = auto_corr / max(abs(auto_corr));
+peak_idx = ceil(length(auto_corr)/2);
+
+metrics.pslr_with_comp = compute_pslr_corrected(auto_corr, peak_idx, fs, B);
+metrics.islr_with_comp = compute_islr_corrected(auto_corr, peak_idx, fs, B);
+metrics.mlw_with_comp = compute_3db_width_corrected(auto_corr, peak_idx, fs, B);
+metrics.papr_with_comp = 10*log10(max(abs(s_tx_with_H_pulse).^2) / mean(abs(s_tx_with_H_pulse).^2));
+end
+
 function pslr = compute_pslr_corrected(corr_signal, peak_idx, fs, B)
     % 修正的峰值旁瓣比计算函数
     % 基于主瓣理论宽度定义区域
