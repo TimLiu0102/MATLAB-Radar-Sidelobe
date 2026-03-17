@@ -398,7 +398,6 @@ for r = 1:size(sens_results, 1)
 end
 
 
-<<<<<<< codex/set-sensitivity-analysis-order-and-labels-gz9cex
 %% 步骤6.2: 不同B、T_pulse（fs=60e6）鲁棒性分析（1x2子图）
 fs_robust = 60e6;
 B_sweep_MHz = [10, 20, 30, 40, 50];
@@ -479,7 +478,7 @@ title('B: Performance vs T_{pulse}');
 grid on;
 set(gca, 'XTick', Tp_sweep_us);
 legend([p1 p2 p3 p4], {'PSLR','ISLR','Mainlobe width','PAPR'}, 'Location', 'best');
-=======
+
 %% 步骤6.2: 不同B、T_pulse（fs=60e6）鲁棒性分析
 B_list = [15e6, 20e6, 25e6];
 T_pulse_list = [30e-6, 50e-6, 70e-6];
@@ -551,7 +550,7 @@ plot(scenario_id, robust_results(:,10), 'ro--', 'LineWidth', 1.2); hold on;
 plot(scenario_id, robust_results(:,11), 'bo-', 'LineWidth', 1.5);
 xlabel('Scenario ID'); ylabel('PAPR (dB)'); title('PAPR robustness'); grid on;
 legend('No compensation', 'Optimized', 'Location', 'best');
->>>>>>> master
+
 
 %% 步骤7: 随机种子1~50重复优化统计（不影响原有单次绘图）
 %num_trials = 50;
