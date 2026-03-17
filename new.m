@@ -398,6 +398,88 @@ for r = 1:size(sens_results, 1)
 end
 
 
+<<<<<<< codex/set-sensitivity-analysis-order-and-labels-gz9cex
+%% 步骤6.2: 不同B、T_pulse（fs=60e6）鲁棒性分析（1x2子图）
+fs_robust = 60e6;
+B_sweep_MHz = [10, 20, 30, 40, 50];
+Tp_sweep_us = [10, 20, 30, 40, 50];
+
+% 图A: 扫描B，固定T_pulse
+T_fix = T_pulse;
+num_B = numel(B_sweep_MHz);
+robust_B = zeros(num_B, 5); % [B_MHz, PSLR_opt, ISLR_opt, MLW_opt, PAPR_opt]
+for i = 1:num_B
+    B_case = B_sweep_MHz(i) * 1e6;
+    case_metrics = run_single_case_metrics(B_case, T_fix, fs_robust, alpha_reg, A_max, ...
+        lambda1, lambda2, w_pslr, w_islr, min_width_B_multiple, max_width_B_multiple, fa_opt_sens);
+    robust_B(i, :) = [B_sweep_MHz(i), case_metrics.pslr_opt, case_metrics.islr_opt, case_metrics.mlw_opt, case_metrics.papr_opt];
+end
+
+% 图B: 扫描T_pulse，固定B
+B_fix = B;
+num_T = numel(Tp_sweep_us);
+robust_T = zeros(num_T, 5); % [Tp_us, PSLR_opt, ISLR_opt, MLW_opt, PAPR_opt]
+for i = 1:num_T
+    T_case = Tp_sweep_us(i) * 1e-6;
+    case_metrics = run_single_case_metrics(B_fix, T_case, fs_robust, alpha_reg, A_max, ...
+        lambda1, lambda2, w_pslr, w_islr, min_width_B_multiple, max_width_B_multiple, fa_opt_sens);
+    robust_T(i, :) = [Tp_sweep_us(i), case_metrics.pslr_opt, case_metrics.islr_opt, case_metrics.mlw_opt, case_metrics.papr_opt];
+end
+
+fprintf('\n===== Robustness analysis A: sweep B (MHz), T_{pulse}=%.1f us, fs=60e6 =====\n', T_fix*1e6);
+fprintf('%-10s %-12s %-12s %-14s %-12s\n', 'B(MHz)', 'PSLR_opt', 'ISLR_opt', 'MLW_opt(us)', 'PAPR_opt');
+fprintf('%s\n', repmat('-', 1, 68));
+for i = 1:size(robust_B,1)
+    fprintf('%-10.1f %-12.3f %-12.3f %-14.4f %-12.3f\n', robust_B(i,1), robust_B(i,2), robust_B(i,3), robust_B(i,4), robust_B(i,5));
+end
+
+fprintf('\n===== Robustness analysis B: sweep T_{pulse} (us), B=%.1f MHz, fs=60e6 =====\n', B_fix/1e6);
+fprintf('%-10s %-12s %-12s %-14s %-12s\n', 'Tp(us)', 'PSLR_opt', 'ISLR_opt', 'MLW_opt(us)', 'PAPR_opt');
+fprintf('%s\n', repmat('-', 1, 68));
+for i = 1:size(robust_T,1)
+    fprintf('%-10.1f %-12.3f %-12.3f %-14.4f %-12.3f\n', robust_T(i,1), robust_T(i,2), robust_T(i,3), robust_T(i,4), robust_T(i,5));
+end
+
+figure(6);
+set(gcf, 'Position', [150, 120, 1280, 460], 'Color', [1 1 1]);
+tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
+
+% 图A：不同B下性能变化
+nexttile;
+yyaxis left;
+p1 = plot(robust_B(:,1), robust_B(:,2), 'o-b', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p2 = plot(robust_B(:,1), robust_B(:,3), 's-r', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('PSLR / ISLR (dB)');
+
+yyaxis right;
+p3 = plot(robust_B(:,1), robust_B(:,4), '^-m', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p4 = plot(robust_B(:,1), robust_B(:,5), 'd-k', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('Mainlobe width (us) / PAPR (dB)');
+
+xlabel('B (MHz)');
+title('A: Performance vs B');
+grid on;
+set(gca, 'XTick', B_sweep_MHz);
+legend([p1 p2 p3 p4], {'PSLR','ISLR','Mainlobe width','PAPR'}, 'Location', 'best');
+
+% 图B：不同T_pulse下性能变化
+nexttile;
+yyaxis left;
+p1 = plot(robust_T(:,1), robust_T(:,2), 'o-b', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p2 = plot(robust_T(:,1), robust_T(:,3), 's-r', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('PSLR / ISLR (dB)');
+
+yyaxis right;
+p3 = plot(robust_T(:,1), robust_T(:,4), '^-m', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p4 = plot(robust_T(:,1), robust_T(:,5), 'd-k', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('Mainlobe width (us) / PAPR (dB)');
+
+xlabel('T_{pulse} (us)');
+title('B: Performance vs T_{pulse}');
+grid on;
+set(gca, 'XTick', Tp_sweep_us);
+legend([p1 p2 p3 p4], {'PSLR','ISLR','Mainlobe width','PAPR'}, 'Location', 'best');
+=======
 %% 步骤6.2: 不同B、T_pulse（fs=60e6）鲁棒性分析
 B_list = [15e6, 20e6, 25e6];
 T_pulse_list = [30e-6, 50e-6, 70e-6];
@@ -469,6 +551,7 @@ plot(scenario_id, robust_results(:,10), 'ro--', 'LineWidth', 1.2); hold on;
 plot(scenario_id, robust_results(:,11), 'bo-', 'LineWidth', 1.5);
 xlabel('Scenario ID'); ylabel('PAPR (dB)'); title('PAPR robustness'); grid on;
 legend('No compensation', 'Optimized', 'Location', 'best');
+>>>>>>> master
 
 %% 步骤7: 随机种子1~50重复优化统计（不影响原有单次绘图）
 %num_trials = 50;
