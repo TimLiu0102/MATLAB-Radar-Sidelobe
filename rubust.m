@@ -121,6 +121,8 @@ PAPR_hamming = compute_papr(s_tx_hamming_with_H);
 %% NEW: 优化广义余弦窗设计
 %% NEW: 萤火虫算法优化
 rng(1);
+lambda_pslr = 1;
+lambda_islr = 1;
 lambda1 = 10;
 lambda2 = 10;
 fa_opt.pop_size = 20;
@@ -133,7 +135,7 @@ fa_opt.verbose = true;
 best_param = optimize_generalized_cosine_fa(...
     G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, ...
     mainlobe_width_hamming, PAPR_hamming, ...
-    lambda1, lambda2, mu_robust, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B);
+    lambda_pslr, lambda_islr, lambda1, lambda2, mu_robust, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B);
 
 best_coeff = best_param(1:3);
 best_width_B_multiple = best_param(4);
@@ -241,7 +243,7 @@ fprintf('Optimized [a0, a1, a2] = [%.4f, %.4f, %.4f], window width = %.4f * B\n'
 fprintf('Robust settings: K=%d, mu=%.3f, delta_a=%.3f, delta_phi=%.2f deg\n', K_robust, mu_robust, delta_a, delta_phi_deg);
 
 %% ===== local functions =====
-function best_param = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, mu_robust, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B)
+function best_param = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda_pslr, lambda_islr, lambda1, lambda2, mu_robust, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B)
 pop_size = fa_opt.pop_size;
 max_iter = fa_opt.max_iter;
 beta0 = fa_opt.beta0;
@@ -261,7 +263,7 @@ end
 
 J = zeros(pop_size, 1);
 for i = 1:pop_size
-    J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, mu_robust, fs, B);
+    J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda_pslr, lambda_islr, lambda1, lambda2, mu_robust, fs, B);
 end
 
 for iter = 1:max_iter
@@ -272,14 +274,14 @@ for iter = 1:max_iter
                 beta = beta0 * exp(-gamma * r2);
                 step = beta * (pop(j, :) - pop(i, :)) + alpha * ([rand(1, 3)-0.5, rand-0.5]);
                 pop(i, :) = project_coeffs(pop(i, :) + step, min_width_B_multiple, max_width_B_multiple);
-                J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, mu_robust, fs, B);
+                J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda_pslr, lambda_islr, lambda1, lambda2, mu_robust, fs, B);
             end
         end
     end
 
     [best_J, best_idx_iter] = min(J);
     if verbose
-        [~, metrics] = evaluate_window_objective(pop(best_idx_iter, :), G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, mu_robust, fs, B);
+        [~, metrics] = evaluate_window_objective(pop(best_idx_iter, :), G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda_pslr, lambda_islr, lambda1, lambda2, mu_robust, fs, B);
         fprintf('FA iter %02d/%02d | J=%.4f (mean %.4f + mu*max %.4f) | PSLR=%.3f dB | ISLR=%.3f dB | Mainlobe=%.4f us | PAPR=%.3f dB | Width=%.3f*B\n', ...
             iter, max_iter, best_J, metrics.mean_J, metrics.max_J, metrics.pslr_db, metrics.islr_db, metrics.mainlobe_width, metrics.papr_db, pop(best_idx_iter, 4));
     end
@@ -289,7 +291,7 @@ end
 best_param = pop(best_idx, :);
 end
 
-function [J, metrics] = evaluate_window_objective(param, G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda1, lambda2, mu_robust, fs, B)
+function [J, metrics] = evaluate_window_objective(param, G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda_pslr, lambda_islr, lambda1, lambda2, mu_robust, fs, B)
 L = length(f_idx);
 coeff = param(1:3);
 width_B_multiple = param(4);
@@ -321,7 +323,7 @@ for k = 1:K
     mainlobe_width = compute_3db_width_corrected(auto_corr, peak_idx, fs, B);
     papr_db = compute_papr(s_out);
 
-    J_k = pslr_db + islr_db ...
+    J_k = lambda_pslr * pslr_db + lambda_islr * islr_db ...
         + lambda1 * max(0, mainlobe_width - mlw_ham)^2 ...
         + lambda2 * max(0, papr_db - papr_ham)^2;
 
