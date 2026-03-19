@@ -242,6 +242,173 @@ fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Optimized generalized cosine
 fprintf('Optimized [a0, a1, a2] = [%.4f, %.4f, %.4f], window width = %.4f * B\n', best_coeff(1), best_coeff(2), best_coeff(3), best_width_B_multiple);
 fprintf('Robust settings: K=%d, mu=%.3f, delta_a=%.3f, delta_phi=%.2f deg\n', K_robust, mu_robust, delta_a, delta_phi_deg);
 
+%% 步骤6.1: 四个权重灵敏度分析（模仿 new.m 的单因子扰动）
+weight_names = {'lambda_pslr', 'lambda_islr', 'lambda1', 'lambda2'};
+weight_xlabels = {'\lambda_{pslr}', '\lambda_{islr}', '\lambda_1', '\lambda_2'};
+weight_base = [lambda_pslr, lambda_islr, lambda1, lambda2];
+sweep_values = [1, 5, 10, 20, 25];
+
+num_weights = numel(weight_names);
+num_sweeps = numel(sweep_values);
+weight_sens_results = zeros(num_weights*num_sweeps, 10); % [id, sweep, l_pslr, l_islr, l1, l2, PSLR, ISLR, MLW, PAPR]
+
+fa_opt_sens = fa_opt;
+fa_opt_sens.pop_size = 12;
+fa_opt_sens.max_iter = 15;
+fa_opt_sens.verbose = false;
+
+row = 1;
+for weight_idx = 1:num_weights
+    for sweep_idx = 1:num_sweeps
+        cur_weights = weight_base;
+        cur_weights(weight_idx) = sweep_values(sweep_idx);
+
+        rng(1000 + 100*weight_idx + sweep_idx);
+        best_param_sens = optimize_generalized_cosine_fa(...
+            G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, ...
+            mainlobe_width_hamming, PAPR_hamming, ...
+            cur_weights(1), cur_weights(2), cur_weights(3), cur_weights(4), ...
+            mu_robust, min_width_B_multiple, max_width_B_multiple, fa_opt_sens, fs, B);
+
+        [~, sens_metrics] = evaluate_window_objective(best_param_sens, ...
+            G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, ...
+            mainlobe_width_hamming, PAPR_hamming, ...
+            cur_weights(1), cur_weights(2), cur_weights(3), cur_weights(4), mu_robust, fs, B);
+
+        weight_sens_results(row, :) = [weight_idx, sweep_values(sweep_idx), cur_weights, ...
+            sens_metrics.pslr_db, sens_metrics.islr_db, sens_metrics.mainlobe_width, sens_metrics.papr_db];
+        row = row + 1;
+    end
+end
+
+figure(5);
+set(gcf, 'Position', [120, 90, 1250, 760], 'Color', [0.94 0.94 0.94]);
+tiledlayout(2,2,'Padding','compact','TileSpacing','compact');
+
+for weight_idx = 1:num_weights
+    nexttile;
+    ax = gca;
+    ax.Color = [0.94 0.94 0.94];
+    ax.FontSize = 12;
+    sel = weight_sens_results(:,1) == weight_idx;
+
+    x_val = weight_sens_results(sel,2);
+    [x_val, order_idx] = sort(x_val);
+    y_pslr = weight_sens_results(sel,7); y_pslr = y_pslr(order_idx);
+    y_islr = weight_sens_results(sel,8); y_islr = y_islr(order_idx);
+    y_mlw = weight_sens_results(sel,9); y_mlw = y_mlw(order_idx);
+    y_papr = weight_sens_results(sel,10); y_papr = y_papr(order_idx);
+
+    yyaxis left;
+    p1 = plot(x_val, y_pslr, 'o-', 'Color', 'b', 'LineWidth', 1.6, ...
+        'MarkerSize', 7, 'MarkerFaceColor', 'none'); hold on;
+    p2 = plot(x_val, y_islr, 's-', 'Color', 'r', 'LineWidth', 1.6, ...
+        'MarkerSize', 6, 'MarkerFaceColor', 'none');
+    ylabel('PSLR / ISLR (dB)', 'Color', 'b');
+    set(gca, 'YColor', 'b');
+
+    yyaxis right;
+    p3 = plot(x_val, y_papr, 'd-', 'Color', 'k', 'LineWidth', 1.6, ...
+        'MarkerSize', 7, 'MarkerFaceColor', 'none'); hold on;
+    p4 = plot(x_val, y_mlw, '^-', 'Color', 'm', 'LineWidth', 1.6, ...
+        'MarkerSize', 7, 'MarkerFaceColor', 'none');
+    ylabel('PAPR (dB) / main-lobe width (\mus)', 'Color', [0.85 0.33 0.10]);
+    set(gca, 'YColor', [0.85 0.33 0.10]);
+
+    xlabel(weight_xlabels{weight_idx});
+    title([weight_names{weight_idx}, ' sensitivity']);
+    grid on;
+    set(gca, 'XTick', sweep_values);
+    legend([p1, p2, p3, p4], {'PSLR', 'ISLR', 'PAPR', 'main-lobe width'}, 'Location', 'best');
+end
+
+fprintf('\n===== Sensitivity analysis for four weights =====\n');
+fprintf('%-14s %-8s %-12s %-12s %-10s %-10s %-11s %-11s %-12s %-10s\n', ...
+    'Weight', 'Value', 'lambda_pslr', 'lambda_islr', 'lambda1', 'lambda2', 'PSLR(dB)', 'ISLR(dB)', 'Mainlobe(us)', 'PAPR(dB)');
+fprintf('%s\n', repmat('-', 1, 126));
+for r = 1:size(weight_sens_results, 1)
+    idx = weight_sens_results(r,1);
+    fprintf('%-14s %-8.2f %-12.3f %-12.3f %-10.3f %-10.3f %-11.3f %-11.3f %-12.4f %-10.3f\n', ...
+        weight_names{idx}, weight_sens_results(r,2), weight_sens_results(r,3), weight_sens_results(r,4), ...
+        weight_sens_results(r,5), weight_sens_results(r,6), weight_sens_results(r,7), weight_sens_results(r,8), ...
+        weight_sens_results(r,9), weight_sens_results(r,10));
+end
+
+%% 步骤6.2: K 和 mu 鲁棒参数灵敏度分析
+K_sweep = [5, 10, 20, 30, 40];
+mu_sweep = [0.0, 0.1, 0.3, 0.5, 0.8];
+
+num_K = numel(K_sweep);
+num_mu = numel(mu_sweep);
+K_sens_results = zeros(num_K, 6); % [K, mu, PSLR, ISLR, MLW, PAPR]
+mu_sens_results = zeros(num_mu, 6); % [K, mu, PSLR, ISLR, MLW, PAPR]
+
+for i = 1:num_K
+    rng(2000 + i);
+    case_metrics = run_robust_sensitivity_case(K_sweep(i), mu_robust, H_k, f_center_idx, delta_a, delta_phi, ...
+        G_tx_k, S_LFM_k, N_fft, N_pulse, f_idx, f_local, mainlobe_width_hamming, PAPR_hamming, ...
+        lambda_pslr, lambda_islr, lambda1, lambda2, min_width_B_multiple, max_width_B_multiple, fa_opt_sens, fs, B);
+    K_sens_results(i, :) = [K_sweep(i), mu_robust, case_metrics.pslr_db, case_metrics.islr_db, case_metrics.mainlobe_width, case_metrics.papr_db];
+end
+
+for i = 1:num_mu
+    rng(3000 + i);
+    case_metrics = run_robust_sensitivity_case(K_robust, mu_sweep(i), H_k, f_center_idx, delta_a, delta_phi, ...
+        G_tx_k, S_LFM_k, N_fft, N_pulse, f_idx, f_local, mainlobe_width_hamming, PAPR_hamming, ...
+        lambda_pslr, lambda_islr, lambda1, lambda2, min_width_B_multiple, max_width_B_multiple, fa_opt_sens, fs, B);
+    mu_sens_results(i, :) = [K_robust, mu_sweep(i), case_metrics.pslr_db, case_metrics.islr_db, case_metrics.mainlobe_width, case_metrics.papr_db];
+end
+
+fprintf('\n===== Robust sensitivity analysis A: sweep K (mu=%.2f) =====\n', mu_robust);
+fprintf('%-8s %-8s %-12s %-12s %-14s %-12s\n', 'K', 'mu', 'PSLR(dB)', 'ISLR(dB)', 'MLW(us)', 'PAPR(dB)');
+fprintf('%s\n', repmat('-', 1, 72));
+for i = 1:size(K_sens_results,1)
+    fprintf('%-8.0f %-8.2f %-12.3f %-12.3f %-14.4f %-12.3f\n', K_sens_results(i,1), K_sens_results(i,2), K_sens_results(i,3), K_sens_results(i,4), K_sens_results(i,5), K_sens_results(i,6));
+end
+
+fprintf('\n===== Robust sensitivity analysis B: sweep mu (K=%d) =====\n', K_robust);
+fprintf('%-8s %-8s %-12s %-12s %-14s %-12s\n', 'K', 'mu', 'PSLR(dB)', 'ISLR(dB)', 'MLW(us)', 'PAPR(dB)');
+fprintf('%s\n', repmat('-', 1, 72));
+for i = 1:size(mu_sens_results,1)
+    fprintf('%-8.0f %-8.2f %-12.3f %-12.3f %-14.4f %-12.3f\n', mu_sens_results(i,1), mu_sens_results(i,2), mu_sens_results(i,3), mu_sens_results(i,4), mu_sens_results(i,5), mu_sens_results(i,6));
+end
+
+figure(6);
+set(gcf, 'Position', [150, 120, 1280, 460], 'Color', [1 1 1]);
+tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
+
+nexttile;
+yyaxis left;
+p1 = plot(K_sens_results(:,1), K_sens_results(:,3), 'o-b', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p2 = plot(K_sens_results(:,1), K_sens_results(:,4), 's-r', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('PSLR / ISLR (dB)');
+
+yyaxis right;
+p3 = plot(K_sens_results(:,1), K_sens_results(:,5), '^-m', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p4 = plot(K_sens_results(:,1), K_sens_results(:,6), 'd-k', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('Mainlobe width (us) / PAPR (dB)');
+
+xlabel('K');
+title('A: Performance vs K');
+grid on;
+legend([p1, p2, p3, p4], {'PSLR', 'ISLR', 'Mainlobe width', 'PAPR'}, 'Location', 'best');
+
+nexttile;
+yyaxis left;
+p1 = plot(mu_sens_results(:,2), mu_sens_results(:,3), 'o-b', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p2 = plot(mu_sens_results(:,2), mu_sens_results(:,4), 's-r', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('PSLR / ISLR (dB)');
+
+yyaxis right;
+p3 = plot(mu_sens_results(:,2), mu_sens_results(:,5), '^-m', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p4 = plot(mu_sens_results(:,2), mu_sens_results(:,6), 'd-k', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('Mainlobe width (us) / PAPR (dB)');
+
+xlabel('\mu');
+title('B: Performance vs \mu');
+grid on;
+legend([p1, p2, p3, p4], {'PSLR', 'ISLR', 'Mainlobe width', 'PAPR'}, 'Location', 'best');
+
 %% ===== local functions =====
 function best_param = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_scenarios, N_fft, N_pulse, f_idx, f_local, mlw_ham, papr_ham, lambda_pslr, lambda_islr, lambda1, lambda2, mu_robust, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B)
 pop_size = fa_opt.pop_size;
@@ -385,6 +552,18 @@ width_B_multiple = max(min_width_B_multiple, min(max_width_B_multiple, width_B_m
 param = [coeff, width_B_multiple];
 end
 
+function metrics = run_robust_sensitivity_case(K_case, mu_case, H_nominal, f_center_idx, delta_a, delta_phi, ...
+    G_tx_k, S_LFM_k, N_fft, N_pulse, f_idx, f_local, mlw_ref, papr_ref, ...
+    lambda_pslr, lambda_islr, lambda1, lambda2, min_width_B_multiple, max_width_B_multiple, fa_opt_case, fs, B)
+H_scenarios_case = build_perturbed_channels(H_nominal, f_center_idx, K_case, delta_a, delta_phi);
+best_param_case = optimize_generalized_cosine_fa(...
+    G_tx_k, S_LFM_k, H_scenarios_case, N_fft, N_pulse, f_idx, f_local, ...
+    mlw_ref, papr_ref, lambda_pslr, lambda_islr, lambda1, lambda2, ...
+    mu_case, min_width_B_multiple, max_width_B_multiple, fa_opt_case, fs, B);
+[~, metrics] = evaluate_window_objective(best_param_case, ...
+    G_tx_k, S_LFM_k, H_scenarios_case, N_fft, N_pulse, f_idx, f_local, ...
+    mlw_ref, papr_ref, lambda_pslr, lambda_islr, lambda1, lambda2, mu_case, fs, B);
+end
 
 function H_scenarios = build_perturbed_channels(H_nominal, inband_idx, K, delta_a, delta_phi)
 N = numel(H_nominal);
