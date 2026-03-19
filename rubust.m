@@ -389,8 +389,9 @@ p4 = plot(K_sens_results(:,1), K_sens_results(:,6), 'd-k', 'LineWidth', 1.5, 'Ma
 ylabel('Mainlobe width (us) / PAPR (dB)');
 
 xlabel('K');
-title('A: Performance vs K');
+title('Performance vs K');
 grid on;
+set(gca, 'XTick', K_sweep);
 legend([p1, p2, p3, p4], {'PSLR', 'ISLR', 'Mainlobe width', 'PAPR'}, 'Location', 'best');
 
 nexttile;
@@ -405,8 +406,94 @@ p4 = plot(mu_sens_results(:,2), mu_sens_results(:,6), 'd-k', 'LineWidth', 1.5, '
 ylabel('Mainlobe width (us) / PAPR (dB)');
 
 xlabel('\mu');
-title('B: Performance vs \mu');
+title('Performance vs \mu');
 grid on;
+set(gca, 'XTick', mu_sweep);
+legend([p1, p2, p3, p4], {'PSLR', 'ISLR', 'Mainlobe width', 'PAPR'}, 'Location', 'best');
+
+%% 步骤6.3: 不同 B、T_pulse 的鲁棒性分析（模仿 new.m）
+fs_robust = 60e6;
+B_sweep_MHz = [10, 20, 30, 40];
+Tp_sweep_us = [10, 20, 30, 40];
+
+% 图A: 扫描 B，固定 T_pulse
+T_fix = T_pulse;
+num_B = numel(B_sweep_MHz);
+robust_B = zeros(num_B, 5); % [B_MHz, PSLR_opt, ISLR_opt, MLW_opt, PAPR_opt]
+for i = 1:num_B
+    B_case = B_sweep_MHz(i) * 1e6;
+    rng(2000 + i);
+    case_metrics = run_single_case_metrics(B_case, T_fix, fs_robust, alpha_reg, A_max, ...
+        K_robust, mu_robust, delta_a, delta_phi, lambda_pslr, lambda_islr, lambda1, lambda2, ...
+        min_width_B_multiple, max_width_B_multiple, fa_opt_sens);
+    robust_B(i, :) = [B_sweep_MHz(i), case_metrics.pslr_opt, case_metrics.islr_opt, case_metrics.mlw_opt, case_metrics.papr_opt];
+end
+
+% 图B: 扫描 T_pulse，固定 B
+B_fix = B;
+num_T = numel(Tp_sweep_us);
+robust_T = zeros(num_T, 5); % [Tp_us, PSLR_opt, ISLR_opt, MLW_opt, PAPR_opt]
+for i = 1:num_T
+    T_case = Tp_sweep_us(i) * 1e-6;
+    rng(3000 + i);
+    case_metrics = run_single_case_metrics(B_fix, T_case, fs_robust, alpha_reg, A_max, ...
+        K_robust, mu_robust, delta_a, delta_phi, lambda_pslr, lambda_islr, lambda1, lambda2, ...
+        min_width_B_multiple, max_width_B_multiple, fa_opt_sens);
+    robust_T(i, :) = [Tp_sweep_us(i), case_metrics.pslr_opt, case_metrics.islr_opt, case_metrics.mlw_opt, case_metrics.papr_opt];
+end
+
+fprintf('\n===== Robustness analysis A: sweep B (MHz), T_{pulse}=%.1f us, fs=60e6 =====\n', T_fix*1e6);
+fprintf('%-10s %-12s %-12s %-14s %-12s\n', 'B(MHz)', 'PSLR_opt', 'ISLR_opt', 'MLW_opt(us)', 'PAPR_opt');
+fprintf('%s\n', repmat('-', 1, 68));
+for i = 1:size(robust_B,1)
+    fprintf('%-10.1f %-12.3f %-12.3f %-14.4f %-12.3f\n', robust_B(i,1), robust_B(i,2), robust_B(i,3), robust_B(i,4), robust_B(i,5));
+end
+
+fprintf('\n===== Robustness analysis B: sweep T_{pulse} (us), B=%.1f MHz, fs=60e6 =====\n', B_fix/1e6);
+fprintf('%-10s %-12s %-12s %-14s %-12s\n', 'Tp(us)', 'PSLR_opt', 'ISLR_opt', 'MLW_opt(us)', 'PAPR_opt');
+fprintf('%s\n', repmat('-', 1, 68));
+for i = 1:size(robust_T,1)
+    fprintf('%-10.1f %-12.3f %-12.3f %-14.4f %-12.3f\n', robust_T(i,1), robust_T(i,2), robust_T(i,3), robust_T(i,4), robust_T(i,5));
+end
+
+figure(7);
+set(gcf, 'Position', [150, 120, 1280, 460], 'Color', [1 1 1]);
+tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
+
+% 图A：不同 B 下性能变化
+nexttile;
+yyaxis left;
+p1 = plot(robust_B(:,1), robust_B(:,2), 'o-b', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p2 = plot(robust_B(:,1), robust_B(:,3), 's-r', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('PSLR / ISLR (dB)');
+
+yyaxis right;
+p3 = plot(robust_B(:,1), robust_B(:,4), '^-m', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p4 = plot(robust_B(:,1), robust_B(:,5), 'd-k', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('Mainlobe width (us) / PAPR (dB)');
+
+xlabel('B (MHz)');
+title('A: Performance vs B');
+grid on;
+set(gca, 'XTick', B_sweep_MHz);
+legend([p1, p2, p3, p4], {'PSLR', 'ISLR', 'Mainlobe width', 'PAPR'}, 'Location', 'best');
+
+% 图B：不同 T_pulse 下性能变化
+nexttile;
+yyaxis left;
+p1 = plot(robust_T(:,1), robust_T(:,2), 'o-b', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p2 = plot(robust_T(:,1), robust_T(:,3), 's-r', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('PSLR / ISLR (dB)');
+
+yyaxis right;
+p3 = plot(robust_T(:,1), robust_T(:,4), '^-m', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p4 = plot(robust_T(:,1), robust_T(:,5), 'd-k', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('Mainlobe width (us) / PAPR (dB)');
+
+xlabel('T_{pulse} (us)');
+title('B: Performance vs T_{pulse}');
+grid on;
+set(gca, 'XTick', Tp_sweep_us);
 legend([p1, p2, p3, p4], {'PSLR', 'ISLR', 'Mainlobe width', 'PAPR'}, 'Location', 'best');
 
 %% ===== local functions =====
@@ -563,6 +650,77 @@ best_param_case = optimize_generalized_cosine_fa(...
 [~, metrics] = evaluate_window_objective(best_param_case, ...
     G_tx_k, S_LFM_k, H_scenarios_case, N_fft, N_pulse, f_idx, f_local, ...
     mlw_ref, papr_ref, lambda_pslr, lambda_islr, lambda1, lambda2, mu_case, fs, B);
+end
+
+function case_metrics = run_single_case_metrics(B_case, T_case, fs_case, alpha_reg, A_max, ...
+    K_case, mu_case, delta_a, delta_phi, lambda_pslr, lambda_islr, lambda1, lambda2, ...
+    min_width_B_multiple, max_width_B_multiple, fa_opt_case)
+N_pulse_case = round(T_case * fs_case);
+N_fft_case = 2^nextpow2(N_pulse_case * 8);
+freq_case = (-N_fft_case/2:N_fft_case/2-1)' * (fs_case/N_fft_case);
+
+f_center_idx_case = find(abs(freq_case) <= B_case/2);
+H_mag_case = zeros(N_fft_case, 1);
+H_mag_case(f_center_idx_case) = 0.7 + 0.4*cos(2*pi*freq_case(f_center_idx_case)/B_case*6) .* ...
+                               exp(-(freq_case(f_center_idx_case)/(0.5*B_case)).^2) + ...
+                               0.1*sin(2*pi*freq_case(f_center_idx_case)/B_case*3);
+H_phase_case = zeros(N_fft_case, 1);
+H_phase_case(f_center_idx_case) = 0.4*pi*(freq_case(f_center_idx_case)/B_case).^3 + ...
+                                  0.3*pi*sin(2*pi*freq_case(f_center_idx_case)/B_case*5) + ...
+                                  0.05*pi*(freq_case(f_center_idx_case)/B_case).^2;
+H_nominal_case = fftshift(H_mag_case .* exp(1j*H_phase_case));
+H_scenarios_case = build_perturbed_channels(H_nominal_case, f_center_idx_case, K_case, delta_a, delta_phi);
+
+t_case = (-N_pulse_case/2:N_pulse_case/2-1)' / fs_case;
+k_chirp_case = B_case / T_case;
+s_lfm_case = exp(1j * pi * k_chirp_case * t_case.^2);
+s_lfm_padded_case = zeros(N_fft_case, 1);
+s_lfm_padded_case(1:N_pulse_case) = s_lfm_case;
+S_LFM_case = fft(s_lfm_padded_case, N_fft_case);
+
+epsilon_case = alpha_reg * mean(abs(H_nominal_case .* S_LFM_case));
+G_tx_case = S_LFM_case ./ (H_nominal_case .* S_LFM_case + epsilon_case);
+G_mag_case = abs(G_tx_case);
+if max(G_mag_case) > A_max
+    G_tx_case = G_tx_case ./ max(1, G_mag_case / A_max);
+end
+
+f_idx_case = find(abs(freq_case) <= B_case);
+f_local_case = freq_case(f_idx_case);
+L_case = length(f_idx_case);
+
+hamming_window_case = zeros(N_fft_case, 1);
+hamming_local_case = hamming(L_case);
+hamming_window_case(f_idx_case) = hamming_local_case;
+W_hamming_case = fftshift(hamming_window_case);
+
+S_tx_hamming_case = S_LFM_case .* (G_tx_case .* W_hamming_case);
+s_tx_hamming_time_case = ifft(S_tx_hamming_case, N_fft_case);
+S_tx_hamming_full_case = fft(s_tx_hamming_time_case, N_fft_case);
+s_tx_hamming_with_H_case = ifft(S_tx_hamming_full_case .* H_nominal_case, N_fft_case);
+s_tx_hamming_case = s_tx_hamming_with_H_case(1:N_pulse_case);
+s_tx_hamming_case = s_tx_hamming_case / sqrt(sum(abs(s_tx_hamming_case).^2));
+
+auto_corr_hamming_case = xcorr(s_tx_hamming_case, s_tx_hamming_case);
+auto_corr_hamming_case = auto_corr_hamming_case / max(abs(auto_corr_hamming_case));
+peak_idx_hamming_case = ceil(length(auto_corr_hamming_case)/2);
+mlw_ref_case = compute_3db_width_corrected(auto_corr_hamming_case, peak_idx_hamming_case, fs_case, B_case);
+papr_ref_case = compute_papr(s_tx_hamming_case);
+
+best_param_case = optimize_generalized_cosine_fa(...
+    G_tx_case, S_LFM_case, H_scenarios_case, N_fft_case, N_pulse_case, f_idx_case, f_local_case, ...
+    mlw_ref_case, papr_ref_case, lambda_pslr, lambda_islr, lambda1, lambda2, ...
+    mu_case, min_width_B_multiple, max_width_B_multiple, fa_opt_case, fs_case, B_case);
+[~, metrics_case] = evaluate_window_objective(best_param_case, ...
+    G_tx_case, S_LFM_case, H_scenarios_case, N_fft_case, N_pulse_case, f_idx_case, f_local_case, ...
+    mlw_ref_case, papr_ref_case, lambda_pslr, lambda_islr, lambda1, lambda2, mu_case, fs_case, B_case);
+
+case_metrics = struct('pslr_opt', metrics_case.pslr_db, ...
+                      'islr_opt', metrics_case.islr_db, ...
+                      'mlw_opt', metrics_case.mainlobe_width, ...
+                      'papr_opt', metrics_case.papr_db, ...
+                      'mean_J', metrics_case.mean_J, ...
+                      'max_J', metrics_case.max_J);
 end
 
 function H_scenarios = build_perturbed_channels(H_nominal, inband_idx, K, delta_a, delta_phi)
