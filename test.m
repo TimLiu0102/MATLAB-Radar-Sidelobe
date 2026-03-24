@@ -159,29 +159,41 @@ s_tx_with_H_time = ifft(S_tx_with_H, N_fft);
 s_tx_with_H = s_tx_with_H_time(1:N_pulse);
 s_tx_with_H = s_tx_with_H / sqrt(sum(abs(s_tx_with_H).^2));
 
-fprintf('\n=== 三种情况对比（统一能量归一化） ===\n');
+% 情况4: 仅预补偿不加窗后经过系统H
+S_tx_k_no_window = S_LFM_k .* G_tx_k;
+s_tx_time_no_window = ifft(S_tx_k_no_window, N_fft);
+S_tx_no_window_with_H = fft(s_tx_time_no_window, N_fft) .* H_k;
+s_tx_no_window_with_H_time = ifft(S_tx_no_window_with_H, N_fft);
+s_tx_no_window_with_H = s_tx_no_window_with_H_time(1:N_pulse);
+s_tx_no_window_with_H = s_tx_no_window_with_H / sqrt(sum(abs(s_tx_no_window_with_H).^2));
+
+fprintf('\n=== 四种情况对比（统一能量归一化） ===\n');
 fprintf('1. 理想LFM（无系统失真）\n');
 fprintf('2. 原始LFM + 系统失真（无预补偿）\n');
 fprintf('3. 预补偿LFM + 系统失真（有预补偿）\n\n');
+fprintf('4. 预补偿LFM + 系统失真（仅预补偿不加窗）\n\n');
 
 %% 步骤6: 自相关分析
 % 计算自相关函数
 t_corr = (-N_pulse+1:N_pulse-1) / fs * 1e6;  % 微秒
 
-% 计算三种情况的自相关
+% 计算四种情况的自相关
 auto_corr_ideal = xcorr(s_ideal, s_ideal);
 auto_corr_no_comp = xcorr(s_with_H, s_with_H);
 auto_corr_with_comp = xcorr(s_tx_with_H, s_tx_with_H);
+auto_corr_precomp_only = xcorr(s_tx_no_window_with_H, s_tx_no_window_with_H);
 
 % 归一化自相关（能量归一化）
 auto_corr_ideal = auto_corr_ideal / max(abs(auto_corr_ideal));
 auto_corr_no_comp = auto_corr_no_comp / max(abs(auto_corr_no_comp));
 auto_corr_with_comp = auto_corr_with_comp / max(abs(auto_corr_with_comp));
+auto_corr_precomp_only = auto_corr_precomp_only / max(abs(auto_corr_precomp_only));
 
 % 转换为dB显示
 auto_corr_ideal_db = 20*log10(abs(auto_corr_ideal) + 1e-10);
 auto_corr_no_comp_db = 20*log10(abs(auto_corr_no_comp) + 1e-10);
 auto_corr_with_comp_db = 20*log10(abs(auto_corr_with_comp) + 1e-10);
+auto_corr_precomp_only_db = 20*log10(abs(auto_corr_precomp_only) + 1e-10);
 
 %% 步骤7: 综合性能分析
 figure('Position', [50, 50, 1400, 800]);
@@ -273,16 +285,19 @@ center_idx = ceil(length(auto_corr_ideal)/2);
 pslr_ideal = compute_pslr_corrected(auto_corr_ideal, center_idx, fs, B);
 pslr_no_comp = compute_pslr_corrected(auto_corr_no_comp, center_idx, fs, B);
 pslr_with_comp = compute_pslr_corrected(auto_corr_with_comp, center_idx, fs, B);
+pslr_precomp_only = compute_pslr_corrected(auto_corr_precomp_only, center_idx, fs, B);
 
 % 积分旁瓣比（ISLR）
 islr_ideal = compute_islr_corrected(auto_corr_ideal, center_idx, fs, B);
 islr_no_comp = compute_islr_corrected(auto_corr_no_comp, center_idx, fs, B);
 islr_with_comp = compute_islr_corrected(auto_corr_with_comp, center_idx, fs, B);
+islr_precomp_only = compute_islr_corrected(auto_corr_precomp_only, center_idx, fs, B);
 
 % 主瓣宽度（3dB）
 bw3db_ideal = compute_3db_width_corrected(auto_corr_ideal, center_idx, fs, B);
 bw3db_no_comp = compute_3db_width_corrected(auto_corr_no_comp, center_idx, fs, B);
 bw3db_with_comp = compute_3db_width_corrected(auto_corr_with_comp, center_idx, fs, B);
+bw3db_precomp_only = compute_3db_width_corrected(auto_corr_precomp_only, center_idx, fs, B);
 
 % 理论主瓣宽度
 theory_width = 0.886 / B * 1e6;  % 微秒
@@ -294,6 +309,7 @@ theory_pslr = -13.26;  % dB
 PAPR_ideal = 10*log10(max(abs(s_ideal).^2) / mean(abs(s_ideal).^2));
 PAPR_no_comp = 10*log10(max(abs(s_with_H).^2) / mean(abs(s_with_H).^2));
 PAPR_with_comp = 10*log10(max(abs(s_tx_with_H).^2) / mean(abs(s_tx_with_H).^2));
+PAPR_precomp_only = 10*log10(max(abs(s_tx_no_window_with_H).^2) / mean(abs(s_tx_no_window_with_H).^2));
 
 % 显示性能指标表格
 subplot(3,3,[3,6,9]);
@@ -307,6 +323,7 @@ text_str = [text_str sprintf('%-15s %-12s %-12s %-12s\n', '情况', 'PSLR(dB)', 
 text_str = [text_str sprintf('%-15s %-12.2f %-12.2f %-12.3f\n', '理想LFM', pslr_ideal, islr_ideal, bw3db_ideal)];
 text_str = [text_str sprintf('%-15s %-12.2f %-12.2f %-12.3f\n', '无预补偿', pslr_no_comp, islr_no_comp, bw3db_no_comp)];
 text_str = [text_str sprintf('%-15s %-12.2f %-12.2f %-12.3f\n', '有预补偿', pslr_with_comp, islr_with_comp, bw3db_with_comp)];
+text_str = [text_str sprintf('%-15s %-12.2f %-12.2f %-12.3f\n', '仅预补偿不加窗', pslr_precomp_only, islr_precomp_only, bw3db_precomp_only)];
 
 text_str = [text_str sprintf('\n=== 改善效果 ===\n')];
 text_str = [text_str sprintf('PSLR改善: %.2f dB\n', pslr_no_comp - pslr_with_comp)];
@@ -317,6 +334,7 @@ text_str = [text_str sprintf('\n=== PAPR对比（能量归一化后） ===\n')];
 text_str = [text_str sprintf('理想LFM: %.2f dB\n', PAPR_ideal)];
 text_str = [text_str sprintf('无预补偿: %.2f dB\n', PAPR_no_comp)];
 text_str = [text_str sprintf('有预补偿: %.2f dB\n', PAPR_with_comp)];
+text_str = [text_str sprintf('仅预补偿不加窗: %.2f dB\n', PAPR_precomp_only)];
 text_str = [text_str sprintf('PAPR增加: %.2f dB\n', PAPR_with_comp - PAPR_ideal)];
 
 text(0.1, 0.5, text_str, 'FontName', 'FixedWidth', 'FontSize', 10, 'VerticalAlignment', 'middle');
@@ -374,13 +392,17 @@ fprintf('理论PSLR（矩形窗）: %.2f dB\n', theory_pslr);
 fprintf('实测PSLR - 理想LFM: %.2f dB\n', pslr_ideal);
 fprintf('实测PSLR - 无预补偿: %.2f dB（恶化 %.2f dB）\n', pslr_no_comp, pslr_no_comp - pslr_ideal);
 fprintf('实测PSLR - 有预补偿: %.2f dB（改善 %.2f dB）\n', pslr_with_comp, pslr_no_comp - pslr_with_comp);
+fprintf('实测PSLR - 仅预补偿不加窗: %.2f dB\n', pslr_precomp_only);
 fprintf('\n理论主瓣宽度: %.3f μs\n', theory_width);
 fprintf('实测主瓣宽度 - 理想LFM: %.3f μs\n', bw3db_ideal);
 fprintf('实测主瓣宽度 - 无预补偿: %.3f μs\n', bw3db_no_comp);
 fprintf('实测主瓣宽度 - 有预补偿: %.3f μs\n', bw3db_with_comp);
+fprintf('实测主瓣宽度 - 仅预补偿不加窗: %.3f μs\n', bw3db_precomp_only);
 fprintf('\nPAPR - 理想LFM: %.2f dB\n', PAPR_ideal);
 fprintf('PAPR - 无预补偿: %.2f dB\n', PAPR_no_comp);
 fprintf('PAPR - 有预补偿: %.2f dB（增加 %.2f dB）\n', PAPR_with_comp, PAPR_with_comp - PAPR_ideal);
+fprintf('PAPR - 仅预补偿不加窗: %.2f dB（增加 %.2f dB）\n', PAPR_precomp_only, PAPR_precomp_only - PAPR_ideal);
+fprintf('\nISLR - 仅预补偿不加窗: %.2f dB\n', islr_precomp_only);
 
 
 %% 步骤10: 不同B、T_pulse（fs=60e6）鲁棒性分析（1x2子图）
