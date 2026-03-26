@@ -413,8 +413,8 @@ legend([p1, p2, p3, p4], {'PSLR', 'ISLR', 'Mainlobe width', 'PAPR'}, 'Location',
 
 %% 步骤6.3: 不同 B、T_pulse 的鲁棒性分析（模仿 new.m）
 fs_robust = 60e6;
-B_sweep_MHz = [10, 20, 30, 40];
-Tp_sweep_us = [10, 20, 30, 40];
+B_sweep_MHz = [10, 15, 20, 25, 30, 35, 40];
+Tp_sweep_us = [10, 15, 20, 25, 30, 35, 40];
 
 % 图A: 扫描 B，固定 T_pulse
 T_fix = T_pulse;
