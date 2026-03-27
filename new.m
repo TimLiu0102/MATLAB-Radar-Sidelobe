@@ -81,6 +81,15 @@ hamming_win_local = hamming(L);
 hamming_window(f_idx) = hamming_win_local;
 W_hamming_k = fftshift(hamming_window);
 
+
+% Literature链路: 直接优化窗向量（近似分式规划思想）
+% 说明：不同于仅优化少量余弦系数，这里直接对每个窗元素迭代更新，
+% 通过频域旁瓣约束 + 时域投影（非负/对称/归一化）得到可运行文献窗近似实现。
+literature_win_local = design_literature_window_direct(L, 45, -38, 0.10);
+literature_window = zeros(N_fft, 1);
+literature_window(f_idx) = literature_win_local;
+W_literature_k = fftshift(literature_window);
+
 % 先计算无补偿和理想信号（用于基准指标）
 s_ideal = s_lfm / sqrt(sum(abs(s_lfm).^2));
 S_with_H = S_LFM_k .* H_k;
@@ -99,6 +108,18 @@ s_tx_hamming_with_H_time = ifft(S_tx_hamming_with_H, N_fft);
 s_tx_hamming_with_H = s_tx_hamming_with_H_time(1:N_pulse);
 s_tx_hamming_with_H = s_tx_hamming_with_H / sqrt(sum(abs(s_tx_hamming_with_H).^2));
 
+
+% Literature窗链路: 预补偿 + Literature窗
+S_tx_literature_k = S_LFM_k .* (G_tx_k .* W_literature_k);
+s_tx_literature_time = ifft(S_tx_literature_k, N_fft);
+s_tx_literature_pulse = s_tx_literature_time(1:N_pulse);
+s_tx_literature_pulse = s_tx_literature_pulse / sqrt(sum(abs(s_tx_literature_pulse).^2));
+S_tx_literature_full = fft(s_tx_literature_time, N_fft);
+S_tx_literature_with_H = S_tx_literature_full .* H_k;
+s_tx_literature_with_H_time = ifft(S_tx_literature_with_H, N_fft);
+s_tx_literature_with_H = s_tx_literature_with_H_time(1:N_pulse);
+s_tx_literature_with_H = s_tx_literature_with_H / sqrt(sum(abs(s_tx_literature_with_H).^2));
+
 % Baseline指标
 auto_corr_hamming = xcorr(s_tx_hamming_with_H, s_tx_hamming_with_H);
 auto_corr_hamming = auto_corr_hamming / max(abs(auto_corr_hamming));
@@ -107,6 +128,16 @@ PSLR_hamming = compute_pslr_corrected(auto_corr_hamming, peak_idx_hamming, fs, B
 ISLR_hamming = compute_islr_corrected(auto_corr_hamming, peak_idx_hamming, fs, B);
 mainlobe_width_hamming = compute_3db_width_corrected(auto_corr_hamming, peak_idx_hamming, fs, B);
 PAPR_hamming = compute_papr(s_tx_hamming_with_H);
+
+
+% Literature链路指标
+auto_corr_literature = xcorr(s_tx_literature_with_H, s_tx_literature_with_H);
+auto_corr_literature = auto_corr_literature / max(abs(auto_corr_literature));
+peak_idx_literature = ceil(length(auto_corr_literature)/2);
+PSLR_literature = compute_pslr_corrected(auto_corr_literature, peak_idx_literature, fs, B);
+ISLR_literature = compute_islr_corrected(auto_corr_literature, peak_idx_literature, fs, B);
+mainlobe_width_literature = compute_3db_width_corrected(auto_corr_literature, peak_idx_literature, fs, B);
+PAPR_literature = compute_papr(s_tx_literature_with_H);
 
 % LFM参考指标（作为优化约束参考）
 auto_corr_ideal = xcorr(s_ideal, s_ideal);
@@ -165,6 +196,7 @@ auto_corr_opt = auto_corr_opt / max(abs(auto_corr_opt));
 auto_corr_ideal_db = 20*log10(abs(auto_corr_ideal) + 1e-10);
 auto_corr_no_comp_db = 20*log10(abs(auto_corr_no_comp) + 1e-10);
 auto_corr_hamming_db = 20*log10(abs(auto_corr_hamming) + 1e-10);
+auto_corr_literature_db = 20*log10(abs(auto_corr_literature) + 1e-10);
 auto_corr_opt_db = 20*log10(abs(auto_corr_opt) + 1e-10);
 
 t_corr = (-N_pulse+1:N_pulse-1) / fs * 1e6;
@@ -194,19 +226,22 @@ PAPR_opt = compute_papr(s_tx_opt_with_H);
 s_ideal_padded = zeros(N_fft, 1); s_ideal_padded(1:N_pulse) = s_ideal;
 s_with_H_padded = zeros(N_fft, 1); s_with_H_padded(1:N_pulse) = s_with_H;
 s_hamming_padded = zeros(N_fft, 1); s_hamming_padded(1:N_pulse) = s_tx_hamming_with_H;
+s_literature_padded = zeros(N_fft, 1); s_literature_padded(1:N_pulse) = s_tx_literature_with_H;
 s_opt_padded = zeros(N_fft, 1); s_opt_padded(1:N_pulse) = s_tx_opt_with_H;
 
 S_ideal_mag = fftshift(abs(fft(s_ideal_padded, N_fft)));
 S_no_comp_mag = fftshift(abs(fft(s_with_H_padded, N_fft)));
 S_hamming_mag = fftshift(abs(fft(s_hamming_padded, N_fft)));
+S_literature_mag = fftshift(abs(fft(s_literature_padded, N_fft)));
 S_opt_mag = fftshift(abs(fft(s_opt_padded, N_fft)));
 
 % 图1：窗形对比
 figure(1);
 plot(0:L-1, hamming_win_local, 'b-', 'LineWidth', 1.5); hold on;
+plot(0:L-1, literature_win_local, 'k-.', 'LineWidth', 1.5);
 plot(0:L-1, opt_gc_local, 'r--', 'LineWidth', 1.5);
 xlabel('Window Sample Index'); ylabel('Amplitude');
-legend('Hamming', 'Optimized generalized cosine', 'Location', 'best');
+legend('Hamming', 'Literature', 'Optimized generalized cosine', 'Location', 'best');
 grid on;
 
 % 图2：自相关对比图
@@ -214,9 +249,10 @@ figure(2);
 plot(t_corr, auto_corr_ideal_db, 'k-', 'LineWidth', 1.5); hold on;
 plot(t_corr, auto_corr_no_comp_db, 'r--', 'LineWidth', 1.5);
 plot(t_corr, auto_corr_hamming_db, 'b-.', 'LineWidth', 1.5);
+plot(t_corr, auto_corr_literature_db, 'g:', 'LineWidth', 1.7);
 plot(t_corr, auto_corr_opt_db, 'm-', 'LineWidth', 1.5);
 xlabel('Time Delay (\mus)'); ylabel('Autocorrelation (dB)');
-legend('Ideal LFM', 'Distorted output', 'Hamming window', 'Optimized generalized cosine', 'Location', 'best');
+legend('Ideal LFM', 'Distorted output', 'Hamming window', 'Literature window', 'Optimized generalized cosine window', 'Location', 'best');
 ylim([-120, 0]); grid on;
 
 % 图3：频谱幅度对比图
@@ -224,9 +260,10 @@ figure(3);
 plot(freq/1e6, 20*log10(S_ideal_mag/max(S_ideal_mag) + 1e-12), 'k-', 'LineWidth', 1.5); hold on;
 plot(freq/1e6, 20*log10(S_no_comp_mag/max(S_no_comp_mag) + 1e-12), 'r--', 'LineWidth', 1.5);
 plot(freq/1e6, 20*log10(S_hamming_mag/max(S_hamming_mag) + 1e-12), 'b-.', 'LineWidth', 1.5);
+plot(freq/1e6, 20*log10(S_literature_mag/max(S_literature_mag) + 1e-12), 'g:', 'LineWidth', 1.7);
 plot(freq/1e6, 20*log10(S_opt_mag/max(S_opt_mag) + 1e-12), 'm-', 'LineWidth', 1.5);
 xlabel('Frequency (MHz)'); ylabel('Magnitude (dB)');
-legend('Ideal LFM', 'Distorted output', 'Hamming window', 'Optimized generalized cosine', 'Location', 'best');
+legend('Ideal LFM', 'Distorted output', 'Hamming window', 'Literature window', 'Optimized generalized cosine window', 'Location', 'best');
 xlim([-B/1e6*1.5, B/1e6*1.5]); ylim([-100, 5]); grid on;
 
 % 图4：论文风格四联图（适配当前脚本变量）
@@ -247,12 +284,13 @@ else
     W_taylor = kaiser(Nw, 5).';
 end
 W_cheb = chebwin(Nw, 80).';
+W_literature = literature_win_local(:).';
 W_opt = opt_gc_local(:).';
 
-win_list = {W_hamming, W_kaiser, W_taylor, W_cheb, W_opt};
-labels = {'Hamming','Kaiser','Taylor','Chebyshev','Proposed'};
-styles = {'r--','b-.','m:','c--','g-'};
-widths = [1.0, 1.0, 1.2, 1.0, 1.5];
+win_list = {W_hamming, W_kaiser, W_taylor, W_cheb, W_literature, W_opt};
+labels = {'Hamming','Kaiser','Taylor','Chebyshev','Literature','Proposed'};
+styles = {'r--','b-.','m:','c--','k-.','g-'};
+widths = [1.0, 1.0, 1.2, 1.0, 1.2, 1.5];
 
 % (b) 时域窗形
 nexttile;
@@ -296,6 +334,7 @@ fprintf('%s\n', repmat('-', 1, 102));
 fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Ideal LFM', PSLR_ideal, ISLR_ideal, mainlobe_width_ideal, PAPR_ideal);
 fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Distorted output', PSLR_no_comp, ISLR_no_comp, mainlobe_width_no_comp, PAPR_no_comp);
 fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Hamming window', PSLR_hamming, ISLR_hamming, mainlobe_width_hamming, PAPR_hamming);
+fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Literature window', PSLR_literature, ISLR_literature, mainlobe_width_literature, PAPR_literature);
 fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Optimized generalized cosine window', PSLR_opt, ISLR_opt, mainlobe_width_opt, PAPR_opt);
 fprintf('Optimized [a0, a1, a2] = [%.4f, %.4f, %.4f], window width = %.4f * B\n', best_coeff(1), best_coeff(2), best_coeff(3), best_width_B_multiple);
 
@@ -551,6 +590,55 @@ legend([p1 p2 p3 p4], {'PSLR','ISLR','Mainlobe width','PAPR'}, 'Location', 'best
 % nexttile; boxplot(PAPR_runs); title('PAPR (dB)'); grid on;
 
 %% ===== local functions =====
+
+function literature_win_local = design_literature_window_direct(L, iter_num, sidelobe_limit_db, mainlobe_ratio)
+% 直接优化窗向量（文献窗近似实现）
+% 思路：
+% 1) 初始化为平滑窗；
+% 2) 迭代在频域限制旁瓣幅度（非主瓣区域）；
+% 3) 反变换后施加时域可实现约束：实数、对称、非负、归一化。
+% 该方法属于“优化整个窗向量元素”的工程近似版本，区别于仅优化少量余弦系数。
+
+if nargin < 2, iter_num = 40; end
+if nargin < 3, sidelobe_limit_db = -38; end
+if nargin < 4, mainlobe_ratio = 0.10; end
+
+literature_win_local = hamming(L);
+literature_win_local = literature_win_local(:);
+N_fft_lit = 2^nextpow2(max(8*L, 1024));
+
+for iter_idx = 1:iter_num
+    W_tmp = fftshift(fft(literature_win_local, N_fft_lit));
+    mag_tmp = abs(W_tmp);
+    pha_tmp = angle(W_tmp);
+
+    center_idx = floor(N_fft_lit/2) + 1;
+    half_main = max(2, round(mainlobe_ratio * N_fft_lit / 2));
+    main_idx = max(1, center_idx-half_main):min(N_fft_lit, center_idx+half_main);
+
+    main_peak = max(mag_tmp(main_idx)) + eps;
+    side_cap = main_peak * 10^(sidelobe_limit_db/20);
+
+    side_mask = true(N_fft_lit, 1);
+    side_mask(main_idx) = false;
+    mag_tmp(side_mask) = min(mag_tmp(side_mask), side_cap);
+
+    W_new = mag_tmp .* exp(1j * pha_tmp);
+    w_new = real(ifft(ifftshift(W_new), N_fft_lit));
+    w_new = w_new(1:L);
+
+    % 时域投影：对称 + 非负 + 归一化
+    w_new = 0.5 * (w_new + flipud(w_new));
+    w_new = max(w_new, 0);
+    w_new = w_new / (max(w_new) + eps);
+
+    % 缓动更新，增强收敛稳定性
+    literature_win_local = 0.7 * literature_win_local + 0.3 * w_new;
+end
+
+literature_win_local = literature_win_local / (max(literature_win_local) + eps);
+end
+
 function best_param = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ref, papr_ref, lambda1, lambda2, w_pslr, w_islr, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B)
 pop_size = fa_opt.pop_size;
 max_iter = fa_opt.max_iter;
