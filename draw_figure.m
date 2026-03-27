@@ -241,6 +241,13 @@ ISLR_windows = zeros(num_windows, 1);
 MW_windows = zeros(num_windows, 1);
 PAPR_windows = zeros(num_windows, 1);
 
+% S_{out}(f) 基线（无额外传统窗）指标，用于步骤8对比
+center_idx_no_comp = ceil(length(auto_corr_no_comp)/2);
+PSLR_no_comp = compute_pslr_corrected(auto_corr_no_comp, center_idx_no_comp, fs, B);
+ISLR_no_comp = compute_islr_corrected(auto_corr_no_comp, center_idx_no_comp, fs, B);
+MW_no_comp = compute_3db_width_corrected(auto_corr_no_comp, center_idx_no_comp, fs, B);
+PAPR_no_comp = compute_papr(s_with_H);
+
 for i = 1:num_windows
     % 生成传统窗（频域带宽固定为 B）
     f_idx_win = find(abs(freq) <= B);
@@ -283,18 +290,23 @@ end
 
 % 传统窗自相关对数对比
 figure(11);
-plot(t_corr, auto_corr_windows_db(:,1), 'k-', 'LineWidth', 1.3); hold on;
+plot(t_corr, auto_corr_no_comp_db, 'g-', 'LineWidth', 1.8); hold on;
+plot(t_corr, auto_corr_windows_db(:,1), 'k-', 'LineWidth', 1.3);
 plot(t_corr, auto_corr_windows_db(:,2), 'b--', 'LineWidth', 1.3);
 plot(t_corr, auto_corr_windows_db(:,3), 'r-.', 'LineWidth', 1.3);
 plot(t_corr, auto_corr_windows_db(:,4), 'm:', 'LineWidth', 1.8);
 xlabel('Time Delay (μs)'); ylabel('Amplitude (dB)');
-legend(window_names, 'Location', 'best');
+legend(['S_{out}(f)', window_names], 'Location', 'best');
 grid on; ylim([-120, 0]);
-title('Traditional Window Comparison (Autocorrelation, dB)');
+title('Traditional Window Comparison vs S_{out}(f) (Autocorrelation, dB)');
 
-% 表格输出（去掉 Figure 12）
-window_col = string(window_names(:));
-result_tbl = table(window_col, PSLR_windows, ISLR_windows, MW_windows, PAPR_windows, ...
+% 表格输出（增加 S_{out}(f) 基线行）
+window_col = string(['S_{out}(f)'; window_names(:)]);
+PSLR_all = [PSLR_no_comp; PSLR_windows];
+ISLR_all = [ISLR_no_comp; ISLR_windows];
+MW_all = [MW_no_comp; MW_windows];
+PAPR_all = [PAPR_no_comp; PAPR_windows];
+result_tbl = table(window_col, PSLR_all, ISLR_all, MW_all, PAPR_all, ...
     'VariableNames', {'Window', 'PSLR_dB', 'ISLR_dB', 'MW_us', 'PAPR_dB'});
 
 fprintf('\n=== Traditional Window Comparison Table ===\n');
