@@ -73,6 +73,8 @@ f_idx = find(abs(freq)<=B);
 L = length(f_idx);
 min_width_B_multiple = 0.8;  % NEW: 优化窗宽下限（以B为单位）
 max_width_B_multiple = 2.0;  % NEW: 优化窗宽上限（受当前频带截断）
+alpha_lit = 7.0;            % 文献窗参数（Yamaoka-Oshima PM默认参数）
+literature_method_id = 1;   % 文献窗方法选择：1=PM1(默认), 2=PM2, 3=PM3
 f_local = freq(f_idx);
 
 % Baseline: 原有海明窗
@@ -80,6 +82,15 @@ hamming_window = zeros(N_fft, 1);
 hamming_win_local = hamming(L);
 hamming_window(f_idx) = hamming_win_local;
 W_hamming_k = fftshift(hamming_window);
+
+
+% Yamaoka-Oshima文献窗链路（IEEE Access 2025）
+% 默认采用Proposed Method 1（PM1）：w(t)=g(t).*cos(pi*t)
+% 其中 g(t)=exp(-alpha_lit*t^2), t∈[-0.5,0.5]
+literature_win_local = build_yamaoka_oshima_window(L, alpha_lit, literature_method_id);
+literature_window = zeros(N_fft, 1);
+literature_window(f_idx) = literature_win_local;
+W_literature_k = fftshift(literature_window);
 
 % 先计算无补偿和理想信号（用于基准指标）
 s_ideal = s_lfm / sqrt(sum(abs(s_lfm).^2));
@@ -99,6 +110,18 @@ s_tx_hamming_with_H_time = ifft(S_tx_hamming_with_H, N_fft);
 s_tx_hamming_with_H = s_tx_hamming_with_H_time(1:N_pulse);
 s_tx_hamming_with_H = s_tx_hamming_with_H / sqrt(sum(abs(s_tx_hamming_with_H).^2));
 
+
+% Yamaoka-Oshima PM1窗链路: 预补偿 + 文献窗
+S_tx_literature_k = S_LFM_k .* (G_tx_k .* W_literature_k);
+s_tx_literature_time = ifft(S_tx_literature_k, N_fft);
+s_tx_literature_pulse = s_tx_literature_time(1:N_pulse);
+s_tx_literature_pulse = s_tx_literature_pulse / sqrt(sum(abs(s_tx_literature_pulse).^2));
+S_tx_literature_full = fft(s_tx_literature_time, N_fft);
+S_tx_literature_with_H = S_tx_literature_full .* H_k;
+s_tx_literature_with_H_time = ifft(S_tx_literature_with_H, N_fft);
+s_tx_literature_with_H = s_tx_literature_with_H_time(1:N_pulse);
+s_tx_literature_with_H = s_tx_literature_with_H / sqrt(sum(abs(s_tx_literature_with_H).^2));
+
 % Baseline指标
 auto_corr_hamming = xcorr(s_tx_hamming_with_H, s_tx_hamming_with_H);
 auto_corr_hamming = auto_corr_hamming / max(abs(auto_corr_hamming));
@@ -107,6 +130,16 @@ PSLR_hamming = compute_pslr_corrected(auto_corr_hamming, peak_idx_hamming, fs, B
 ISLR_hamming = compute_islr_corrected(auto_corr_hamming, peak_idx_hamming, fs, B);
 mainlobe_width_hamming = compute_3db_width_corrected(auto_corr_hamming, peak_idx_hamming, fs, B);
 PAPR_hamming = compute_papr(s_tx_hamming_with_H);
+
+
+% Yamaoka-Oshima PM1窗链路指标
+auto_corr_literature = xcorr(s_tx_literature_with_H, s_tx_literature_with_H);
+auto_corr_literature = auto_corr_literature / max(abs(auto_corr_literature));
+peak_idx_literature = ceil(length(auto_corr_literature)/2);
+PSLR_literature = compute_pslr_corrected(auto_corr_literature, peak_idx_literature, fs, B);
+ISLR_literature = compute_islr_corrected(auto_corr_literature, peak_idx_literature, fs, B);
+mainlobe_width_literature = compute_3db_width_corrected(auto_corr_literature, peak_idx_literature, fs, B);
+PAPR_literature = compute_papr(s_tx_literature_with_H);
 
 % LFM参考指标（作为优化约束参考）
 auto_corr_ideal = xcorr(s_ideal, s_ideal);
@@ -165,6 +198,7 @@ auto_corr_opt = auto_corr_opt / max(abs(auto_corr_opt));
 auto_corr_ideal_db = 20*log10(abs(auto_corr_ideal) + 1e-10);
 auto_corr_no_comp_db = 20*log10(abs(auto_corr_no_comp) + 1e-10);
 auto_corr_hamming_db = 20*log10(abs(auto_corr_hamming) + 1e-10);
+auto_corr_literature_db = 20*log10(abs(auto_corr_literature) + 1e-10);
 auto_corr_opt_db = 20*log10(abs(auto_corr_opt) + 1e-10);
 
 t_corr = (-N_pulse+1:N_pulse-1) / fs * 1e6;
@@ -194,19 +228,22 @@ PAPR_opt = compute_papr(s_tx_opt_with_H);
 s_ideal_padded = zeros(N_fft, 1); s_ideal_padded(1:N_pulse) = s_ideal;
 s_with_H_padded = zeros(N_fft, 1); s_with_H_padded(1:N_pulse) = s_with_H;
 s_hamming_padded = zeros(N_fft, 1); s_hamming_padded(1:N_pulse) = s_tx_hamming_with_H;
+s_literature_padded = zeros(N_fft, 1); s_literature_padded(1:N_pulse) = s_tx_literature_with_H;
 s_opt_padded = zeros(N_fft, 1); s_opt_padded(1:N_pulse) = s_tx_opt_with_H;
 
 S_ideal_mag = fftshift(abs(fft(s_ideal_padded, N_fft)));
 S_no_comp_mag = fftshift(abs(fft(s_with_H_padded, N_fft)));
 S_hamming_mag = fftshift(abs(fft(s_hamming_padded, N_fft)));
+S_literature_mag = fftshift(abs(fft(s_literature_padded, N_fft)));
 S_opt_mag = fftshift(abs(fft(s_opt_padded, N_fft)));
 
 % 图1：窗形对比
 figure(1);
 plot(0:L-1, hamming_win_local, 'b-', 'LineWidth', 1.5); hold on;
+plot(0:L-1, literature_win_local, 'k-.', 'LineWidth', 1.5);
 plot(0:L-1, opt_gc_local, 'r--', 'LineWidth', 1.5);
 xlabel('Window Sample Index'); ylabel('Amplitude');
-legend('Hamming', 'Optimized generalized cosine', 'Location', 'best');
+legend('Hamming', 'Yamaoka-Oshima PM1 window', 'Optimized generalized cosine', 'Location', 'best');
 grid on;
 
 % 图2：自相关对比图
@@ -214,9 +251,10 @@ figure(2);
 plot(t_corr, auto_corr_ideal_db, 'k-', 'LineWidth', 1.5); hold on;
 plot(t_corr, auto_corr_no_comp_db, 'r--', 'LineWidth', 1.5);
 plot(t_corr, auto_corr_hamming_db, 'b-.', 'LineWidth', 1.5);
+plot(t_corr, auto_corr_literature_db, 'g:', 'LineWidth', 1.7);
 plot(t_corr, auto_corr_opt_db, 'm-', 'LineWidth', 1.5);
 xlabel('Time Delay (\mus)'); ylabel('Autocorrelation (dB)');
-legend('Ideal LFM', 'Distorted output', 'Hamming window', 'Optimized generalized cosine', 'Location', 'best');
+legend('Ideal LFM', 'Distorted output', 'Hamming window', 'Yamaoka-Oshima PM1 window', 'Optimized generalized cosine window', 'Location', 'best');
 ylim([-120, 0]); grid on;
 
 % 图3：频谱幅度对比图
@@ -224,9 +262,10 @@ figure(3);
 plot(freq/1e6, 20*log10(S_ideal_mag/max(S_ideal_mag) + 1e-12), 'k-', 'LineWidth', 1.5); hold on;
 plot(freq/1e6, 20*log10(S_no_comp_mag/max(S_no_comp_mag) + 1e-12), 'r--', 'LineWidth', 1.5);
 plot(freq/1e6, 20*log10(S_hamming_mag/max(S_hamming_mag) + 1e-12), 'b-.', 'LineWidth', 1.5);
+plot(freq/1e6, 20*log10(S_literature_mag/max(S_literature_mag) + 1e-12), 'g:', 'LineWidth', 1.7);
 plot(freq/1e6, 20*log10(S_opt_mag/max(S_opt_mag) + 1e-12), 'm-', 'LineWidth', 1.5);
 xlabel('Frequency (MHz)'); ylabel('Magnitude (dB)');
-legend('Ideal LFM', 'Distorted output', 'Hamming window', 'Optimized generalized cosine', 'Location', 'best');
+legend('Ideal LFM', 'Distorted output', 'Hamming window', 'Yamaoka-Oshima PM1 window', 'Optimized generalized cosine window', 'Location', 'best');
 xlim([-B/1e6*1.5, B/1e6*1.5]); ylim([-100, 5]); grid on;
 
 % 图4：论文风格四联图（适配当前脚本变量）
@@ -247,12 +286,13 @@ else
     W_taylor = kaiser(Nw, 5).';
 end
 W_cheb = chebwin(Nw, 80).';
+W_literature = literature_win_local(:).';
 W_opt = opt_gc_local(:).';
 
-win_list = {W_hamming, W_kaiser, W_taylor, W_cheb, W_opt};
-labels = {'Hamming','Kaiser','Taylor','Chebyshev','Proposed'};
-styles = {'r--','b-.','m:','c--','g-'};
-widths = [1.0, 1.0, 1.2, 1.0, 1.5];
+win_list = {W_hamming, W_kaiser, W_taylor, W_cheb, W_literature, W_opt};
+labels = {'Hamming','Kaiser','Taylor','Chebyshev','Yamaoka-Oshima PM1 window','Proposed'};
+styles = {'r--','b-.','m:','c--','k-.','g-'};
+widths = [1.0, 1.0, 1.2, 1.0, 1.2, 1.5];
 
 % (b) 时域窗形
 nexttile;
@@ -296,6 +336,7 @@ fprintf('%s\n', repmat('-', 1, 102));
 fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Ideal LFM', PSLR_ideal, ISLR_ideal, mainlobe_width_ideal, PAPR_ideal);
 fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Distorted output', PSLR_no_comp, ISLR_no_comp, mainlobe_width_no_comp, PAPR_no_comp);
 fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Hamming window', PSLR_hamming, ISLR_hamming, mainlobe_width_hamming, PAPR_hamming);
+fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Yamaoka-Oshima PM1 window', PSLR_literature, ISLR_literature, mainlobe_width_literature, PAPR_literature);
 fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Optimized generalized cosine window', PSLR_opt, ISLR_opt, mainlobe_width_opt, PAPR_opt);
 fprintf('Optimized [a0, a1, a2] = [%.4f, %.4f, %.4f], window width = %.4f * B\n', best_coeff(1), best_coeff(2), best_coeff(3), best_width_B_multiple);
 
@@ -551,6 +592,58 @@ legend([p1 p2 p3 p4], {'PSLR','ISLR','Mainlobe width','PAPR'}, 'Location', 'best
 % nexttile; boxplot(PAPR_runs); title('PAPR (dB)'); grid on;
 
 %% ===== local functions =====
+
+function w = build_yamaoka_oshima_window(L, alpha_lit, method_id)
+% Yamaoka & Oshima (IEEE Access, 2025) 文献窗构造
+% 输入:
+%   L         - 窗长度
+%   alpha_lit - Gaussian基窗参数
+%   method_id - 方法编号: 1=PM1, 2=PM2, 3=PM3
+% 输出:
+%   w         - Lx1列向量，已做实数化/有限值处理/归一化
+
+if nargin < 2 || isempty(alpha_lit)
+    alpha_lit = 7.0;
+end
+if nargin < 3 || isempty(method_id)
+    method_id = 1;
+end
+
+if L <= 0
+    w = zeros(0,1);
+    return;
+end
+
+if L == 1
+    t = 0;
+else
+    t = linspace(-0.5, 0.5, L).';
+end
+
+g = exp(-alpha_lit * t.^2);
+
+if method_id == 1
+    % Proposed Method 1（默认）
+    w = g .* cos(pi*t);
+elseif method_id == 2
+    % Proposed Method 2
+    w = g .* (0.5 + 0.5*cos(2*pi*t));
+elseif method_id == 3
+    % Proposed Method 3
+    w = g .* (0.75*cos(pi*t) + 0.25*cos(3*pi*t));
+else
+    % 非法method_id时回退到PM1，保证可运行
+    w = g .* cos(pi*t);
+end
+
+w = real(w(:));
+w(~isfinite(w)) = 0;
+if max(abs(w)) > 0
+    w = w / max(abs(w));
+end
+
+end
+
 function best_param = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ref, papr_ref, lambda1, lambda2, w_pslr, w_islr, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B)
 pop_size = fa_opt.pop_size;
 max_iter = fa_opt.max_iter;
