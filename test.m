@@ -411,7 +411,9 @@ K_perturb = 20;
 delta_a = 0.05;          % 幅度扰动上限（±5%，与rubust.m一致）
 delta_phi = 5*pi/180;    % 相位扰动上限（±5°，与rubust.m一致）
 
-H_scenarios = build_perturbed_channels(H_k, f_center_idx, K_perturb, delta_a, delta_phi);
+% 注意：H_k已经fftshift到FFT顺序，因此扰动索引也要切换到FFT顺序带内索引
+f_center_idx_fft = find(abs(ifftshift(freq))<=B/2);
+H_scenarios = build_perturbed_channels(H_k, f_center_idx_fft, K_perturb, delta_a, delta_phi);
 
 restoration_error_vec = zeros(K_perturb,1);
 time_error_vec = zeros(K_perturb,1);
