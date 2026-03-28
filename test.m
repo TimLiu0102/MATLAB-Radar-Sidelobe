@@ -426,7 +426,7 @@ for k = 1:K_perturb
     H_case = H_scenarios(:,k);
 
     % 按win_length.m步骤4.1：在扰动后的H(f)下重新做预补偿（不加窗）
-    epsilon_i = alpha_reg * mean(abs(H_case .* S_LFM_k));
+    epsilon_i = 0.01;
     G_tx_i = R_k ./ (H_case .* S_LFM_k + epsilon_i);
 
     % 幅度限制
@@ -461,8 +461,8 @@ for k = 1:K_perturb
 end
 
 fprintf('\n=== 扰动信道下指标统计（K=%d）===\n', K_perturb);
-fprintf('恢复误差(加扰动H后预补偿) spec\_nmse: 均值=%.6f, 最大=%.6f\n', mean(restoration_error_vec), max(restoration_error_vec));
-fprintf('恢复误差(加扰动H后预补偿) time\_nmse: 均值=%.6f, 最大=%.6f\n', mean(time_error_vec), max(time_error_vec));
+fprintf('恢复误差(加扰动H后预补偿) spec_nmse: 均值=%.6f, 最大=%.6f\n', mean(restoration_error_vec), max(restoration_error_vec));
+fprintf('恢复误差(加扰动H后预补偿) time_nmse: 均值=%.6f, 最大=%.6f\n', mean(time_error_vec), max(time_error_vec));
 fprintf('PSLR(dB): 均值=%.4f, 最差=%.4f\n', mean(pslr_perturb_vec), max(pslr_perturb_vec));
 fprintf('ISLR(dB): 均值=%.4f, 最差=%.4f\n', mean(islr_perturb_vec), max(islr_perturb_vec));
 fprintf('PAPR(dB): 均值=%.4f, 最大=%.4f\n', mean(papr_perturb_vec), max(papr_perturb_vec));
