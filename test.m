@@ -405,6 +405,67 @@ fprintf('PAPR - 仅预补偿不加窗: %.2f dB（增加 %.2f dB）\n', PAPR_prec
 fprintf('\nISLR - 仅预补偿不加窗: %.2f dB\n', islr_precomp_only);
 
 
+%% 步骤10: 引入rubust.m扰动并按win_length.m步骤4.1计算相位误差
+% 采用rubust.m中的建模方式：H_pert = H_nominal .* (1+eps_a) .* exp(1j*eps_phi)
+K_perturb = 20;
+delta_a = 0.05;          % 幅度扰动上限（±5%，与rubust.m一致）
+delta_phi = 5*pi/180;    % 相位扰动上限（±5°，与rubust.m一致）
+
+H_scenarios = build_perturbed_channels(H_k, f_center_idx, K_perturb, delta_a, delta_phi);
+
+restoration_error_vec = zeros(K_perturb,1);
+time_error_vec = zeros(K_perturb,1);
+pslr_perturb_vec = zeros(K_perturb,1);
+islr_perturb_vec = zeros(K_perturb,1);
+papr_perturb_vec = zeros(K_perturb,1);
+mlw_perturb_vec = zeros(K_perturb,1);
+
+for k = 1:K_perturb
+    H_case = H_scenarios(:,k);
+
+    % test.m自身的预补偿发射链路
+    S_tx_case = S_LFM_k .* G_tx_k_windowed;
+    s_tx_case_time = ifft(S_tx_case, N_fft);
+
+    % 扰动信道后接收
+    S_rx_case = fft(s_tx_case_time, N_fft) .* H_case;
+    s_rx_case_time = ifft(S_rx_case, N_fft);
+    s_rx_case = s_rx_case_time(1:N_pulse);
+    s_rx_case = s_rx_case / sqrt(sum(abs(s_rx_case).^2) + eps);
+
+    % 用win_length.m步骤4.1方法计算相对误差（restoration/spec_nmse + time_nmse）
+    err_case = evaluate_reference_error(s_rx_case, S_LFM_k, N_pulse, N_fft, freq, B);
+    restoration_error_vec(k) = err_case.spec_nmse;
+    time_error_vec(k) = err_case.time_nmse;
+
+    % 用test.m已有方式计算四个指标
+    auto_corr_case = xcorr(s_rx_case, s_rx_case);
+    auto_corr_case = auto_corr_case / (max(abs(auto_corr_case)) + eps);
+    center_idx_case = ceil(length(auto_corr_case)/2);
+
+    pslr_perturb_vec(k) = compute_pslr_corrected(auto_corr_case, center_idx_case, fs, B);
+    islr_perturb_vec(k) = compute_islr_corrected(auto_corr_case, center_idx_case, fs, B);
+    mlw_perturb_vec(k) = compute_3db_width_corrected(auto_corr_case, center_idx_case, fs, B);
+    papr_perturb_vec(k) = 10*log10(max(abs(s_rx_case).^2) / mean(abs(s_rx_case).^2));
+end
+
+fprintf('\n=== 扰动信道下指标统计（K=%d）===\n', K_perturb);
+fprintf('相对频谱误差spec\_nmse: 均值=%.6f, 最大=%.6f\n', mean(restoration_error_vec), max(restoration_error_vec));
+fprintf('相对时域误差time\_nmse: 均值=%.6f, 最大=%.6f\n', mean(time_error_vec), max(time_error_vec));
+fprintf('PSLR(dB): 均值=%.4f, 最差=%.4f\n', mean(pslr_perturb_vec), max(pslr_perturb_vec));
+fprintf('ISLR(dB): 均值=%.4f, 最差=%.4f\n', mean(islr_perturb_vec), max(islr_perturb_vec));
+fprintf('PAPR(dB): 均值=%.4f, 最大=%.4f\n', mean(papr_perturb_vec), max(papr_perturb_vec));
+fprintf('主瓣宽度(us): 均值=%.4f, 最大=%.4f\n', mean(mlw_perturb_vec), max(mlw_perturb_vec));
+
+% 可视化：五个指标箱型图（相对频谱误差 + PSLR + ISLR + PAPR + 主瓣宽度）
+metrics_matrix = [restoration_error_vec, pslr_perturb_vec, islr_perturb_vec, papr_perturb_vec, mlw_perturb_vec];
+figure('Position', [120, 120, 1200, 420]);
+boxplot(metrics_matrix, 'Labels', {'spec NMSE','PSLR (dB)','ISLR (dB)','PAPR (dB)','Mainlobe Width (us)'});
+ylabel('Metric Value');
+title('扰动场景下五个指标箱型图（误差按win_length步骤4.1）');
+grid on;
+
+
 %% 步骤10: 不同B、T_pulse（fs=60e6）鲁棒性分析（1x2子图）
 fs_robust = 60e6;
 B_sweep_MHz = [10, 15, 20, 25, 30,35, 40];
@@ -626,3 +687,43 @@ function bw_3db = compute_3db_width_corrected(corr_signal, peak_idx, fs, B)
         bw_3db = 0.886 / B * 1e6;
     end
 end
+
+
+function H_scenarios = build_perturbed_channels(H_nominal, inband_idx, K, delta_a, delta_phi)
+N = numel(H_nominal);
+H_scenarios = repmat(H_nominal, 1, K);
+
+for k = 1:K
+    eps_a = zeros(N,1);
+    eps_phi = zeros(N,1);
+    eps_a(inband_idx) = -delta_a + 2*delta_a*rand(numel(inband_idx),1);
+    eps_phi(inband_idx) = -delta_phi + 2*delta_phi*rand(numel(inband_idx),1);
+    H_scenarios(:,k) = H_nominal .* (1 + eps_a) .* exp(1j*eps_phi);
+end
+end
+
+function E_spec = compute_spectrum_error(S_ideal_k, S_out_k, freq, B)
+% win_length.m步骤4.1中使用的带内归一化频谱相对误差
+band_idx = abs(freq)<=B/2;
+A = abs(S_ideal_k(band_idx));
+Bv = abs(S_out_k(band_idx));
+A = A / (norm(A,2) + eps);
+Bv = Bv / (norm(Bv,2) + eps);
+E_spec = (norm(Bv - A, 2)^2) / (norm(A, 2)^2 + eps);
+end
+
+function err = evaluate_reference_error(s_cmp, S_ideal_k, N_pulse, N_fft, freq, B)
+% win_length.m步骤4.1中用于restoration error和time error的计算方式
+s_ideal = ifft(S_ideal_k, N_fft);
+s_ideal = s_ideal(1:N_pulse);
+s_ideal = s_ideal / sqrt(sum(abs(s_ideal).^2) + eps);
+s_cmp = s_cmp / sqrt(sum(abs(s_cmp).^2) + eps);
+
+err.time_nmse = norm(s_cmp - s_ideal, 2)^2 / (norm(s_ideal,2)^2 + eps);
+
+s_cmp_pad = zeros(N_fft,1);
+s_cmp_pad(1:N_pulse) = s_cmp;
+S_cmp = fft(s_cmp_pad, N_fft);
+err.spec_nmse = compute_spectrum_error(S_ideal_k, S_cmp, freq, B);
+end
+
