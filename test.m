@@ -415,8 +415,6 @@ H_scenarios = build_perturbed_channels(H_k, f_center_idx, K_perturb, delta_a, de
 
 restoration_error_vec = zeros(K_perturb,1);
 time_error_vec = zeros(K_perturb,1);
-precomp_spec_error_vec = zeros(K_perturb,1);
-precomp_time_error_vec = zeros(K_perturb,1);
 pslr_perturb_vec = zeros(K_perturb,1);
 islr_perturb_vec = zeros(K_perturb,1);
 papr_perturb_vec = zeros(K_perturb,1);
@@ -425,30 +423,29 @@ mlw_perturb_vec = zeros(K_perturb,1);
 for k = 1:K_perturb
     H_case = H_scenarios(:,k);
 
-    % test.m自身的预补偿发射链路
-    S_tx_case = S_LFM_k .* G_tx_k_windowed;
-    s_tx_case_time = ifft(S_tx_case, N_fft);
+    % 按win_length.m步骤4.1：在扰动后的H(f)下重新做预补偿（不加窗）
+    epsilon_i = alpha_reg * mean(abs(H_case .* S_LFM_k));
+    G_tx_i = R_k ./ (H_case .* S_LFM_k + epsilon_i);
 
-    % 预补偿后发射信号（未经过扰动信道）
-    s_tx_case = s_tx_case_time(1:N_pulse);
-    s_tx_case = s_tx_case / sqrt(sum(abs(s_tx_case).^2) + eps);
+    % 幅度限制
+    G_tx_i_mag = abs(G_tx_i);
+    if max(G_tx_i_mag) > A_max
+        G_tx_i = G_tx_i ./ max(1, G_tx_i_mag/A_max);
+    end
 
-    % 扰动信道后接收
-    S_rx_case = fft(s_tx_case_time, N_fft) .* H_case;
-    s_rx_case_time = ifft(S_rx_case, N_fft);
-    s_rx_case = s_rx_case_time(1:N_pulse);
-    s_rx_case = s_rx_case / sqrt(sum(abs(s_rx_case).^2) + eps);
+    % 发射频谱 + 扰动系统响应后频谱
+    S_tx_i = S_LFM_k .* G_tx_i;
+    S_rx_i = S_tx_i .* H_case;
 
-    % 用win_length.m步骤4.1方法计算相对误差：
-    % (1) 预补偿后信号 vs 原始LFM
-    err_precomp = evaluate_reference_error(s_tx_case, S_LFM_k, N_pulse, N_fft, freq, B);
-    precomp_spec_error_vec(k) = err_precomp.spec_nmse;
-    precomp_time_error_vec(k) = err_precomp.time_nmse;
-
-    % (2) 加扰动后信号 vs 原始LFM
-    err_case = evaluate_reference_error(s_rx_case, S_LFM_k, N_pulse, N_fft, freq, B);
+    % 扰动后+预补偿信号与原始LFM做误差比较（win_length步骤4.1）
+    s_cmp_i = ifft(S_rx_i, N_fft);
+    s_cmp_i = s_cmp_i(1:N_pulse);
+    err_case = evaluate_reference_error(s_cmp_i, S_LFM_k, N_pulse, N_fft, freq, B);
     restoration_error_vec(k) = err_case.spec_nmse;
     time_error_vec(k) = err_case.time_nmse;
+
+    % 归一化后用于PSLR/ISLR/PAPR/主瓣宽度评估
+    s_rx_case = s_cmp_i / sqrt(sum(abs(s_cmp_i).^2) + eps);
 
     % 用test.m已有方式计算四个指标
     auto_corr_case = xcorr(s_rx_case, s_rx_case);
@@ -462,9 +459,8 @@ for k = 1:K_perturb
 end
 
 fprintf('\n=== 扰动信道下指标统计（K=%d）===\n', K_perturb);
-fprintf('预补偿后 vs 原始LFM: spec\_nmse均值=%.6f, time\_nmse均值=%.6f\n', mean(precomp_spec_error_vec), mean(precomp_time_error_vec));
-fprintf('加扰动后 vs 原始LFM: spec\_nmse均值=%.6f, 最大=%.6f\n', mean(restoration_error_vec), max(restoration_error_vec));
-fprintf('加扰动后 vs 原始LFM: time\_nmse均值=%.6f, 最大=%.6f\n', mean(time_error_vec), max(time_error_vec));
+fprintf('恢复误差(加扰动H后预补偿) spec\_nmse: 均值=%.6f, 最大=%.6f\n', mean(restoration_error_vec), max(restoration_error_vec));
+fprintf('恢复误差(加扰动H后预补偿) time\_nmse: 均值=%.6f, 最大=%.6f\n', mean(time_error_vec), max(time_error_vec));
 fprintf('PSLR(dB): 均值=%.4f, 最差=%.4f\n', mean(pslr_perturb_vec), max(pslr_perturb_vec));
 fprintf('ISLR(dB): 均值=%.4f, 最差=%.4f\n', mean(islr_perturb_vec), max(islr_perturb_vec));
 fprintf('PAPR(dB): 均值=%.4f, 最大=%.4f\n', mean(papr_perturb_vec), max(papr_perturb_vec));
@@ -473,7 +469,7 @@ fprintf('主瓣宽度(us): 均值=%.4f, 最大=%.4f\n', mean(mlw_perturb_vec), m
 % 可视化：五个指标箱型图（相对频谱误差 + PSLR + ISLR + PAPR + 主瓣宽度）
 metrics_matrix = [restoration_error_vec, pslr_perturb_vec, islr_perturb_vec, papr_perturb_vec, mlw_perturb_vec];
 figure('Position', [120, 120, 1200, 420]);
-boxplot(metrics_matrix, 'Labels', {'spec NMSE (perturbed)','PSLR (dB)','ISLR (dB)','PAPR (dB)','Mainlobe Width (us)'});
+boxplot(metrics_matrix, 'Labels', {'restoration spec NMSE','PSLR (dB)','ISLR (dB)','PAPR (dB)','Mainlobe Width (us)'});
 ylabel('Metric Value');
 title('扰动场景下五个指标箱型图（误差按win_length步骤4.1）');
 grid on;
