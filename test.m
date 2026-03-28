@@ -413,7 +413,8 @@ delta_phi = 5*pi/180;    % 相位扰动上限（±5°，与rubust.m一致）
 
 H_scenarios = build_perturbed_channels(H_k, f_center_idx, K_perturb, delta_a, delta_phi);
 
-phase_error_vec = zeros(K_perturb,1);
+restoration_error_vec = zeros(K_perturb,1);
+time_error_vec = zeros(K_perturb,1);
 pslr_perturb_vec = zeros(K_perturb,1);
 islr_perturb_vec = zeros(K_perturb,1);
 papr_perturb_vec = zeros(K_perturb,1);
@@ -432,9 +433,10 @@ for k = 1:K_perturb
     s_rx_case = s_rx_case_time(1:N_pulse);
     s_rx_case = s_rx_case / sqrt(sum(abs(s_rx_case).^2) + eps);
 
-    % 用win_length.m步骤4.1思路计算相位误差（带内相位均方根误差）
-    err_case = evaluate_reference_error_phase(s_rx_case, S_LFM_k, N_pulse, N_fft, freq, B);
-    phase_error_vec(k) = err_case.phase_rmse_deg;
+    % 用win_length.m步骤4.1方法计算相对误差（restoration/spec_nmse + time_nmse）
+    err_case = evaluate_reference_error(s_rx_case, S_LFM_k, N_pulse, N_fft, freq, B);
+    restoration_error_vec(k) = err_case.spec_nmse;
+    time_error_vec(k) = err_case.time_nmse;
 
     % 用test.m已有方式计算四个指标
     auto_corr_case = xcorr(s_rx_case, s_rx_case);
@@ -448,18 +450,19 @@ for k = 1:K_perturb
 end
 
 fprintf('\n=== 扰动信道下指标统计（K=%d）===\n', K_perturb);
-fprintf('相位误差RMSE(度): 均值=%.4f, 最大=%.4f\n', mean(phase_error_vec), max(phase_error_vec));
+fprintf('相对频谱误差spec\_nmse: 均值=%.6f, 最大=%.6f\n', mean(restoration_error_vec), max(restoration_error_vec));
+fprintf('相对时域误差time\_nmse: 均值=%.6f, 最大=%.6f\n', mean(time_error_vec), max(time_error_vec));
 fprintf('PSLR(dB): 均值=%.4f, 最差=%.4f\n', mean(pslr_perturb_vec), max(pslr_perturb_vec));
 fprintf('ISLR(dB): 均值=%.4f, 最差=%.4f\n', mean(islr_perturb_vec), max(islr_perturb_vec));
 fprintf('PAPR(dB): 均值=%.4f, 最大=%.4f\n', mean(papr_perturb_vec), max(papr_perturb_vec));
 fprintf('主瓣宽度(us): 均值=%.4f, 最大=%.4f\n', mean(mlw_perturb_vec), max(mlw_perturb_vec));
 
-% 可视化：五个指标箱型图（相位误差 + PSLR + ISLR + PAPR + 主瓣宽度）
-metrics_matrix = [phase_error_vec, pslr_perturb_vec, islr_perturb_vec, papr_perturb_vec, mlw_perturb_vec];
-figure('Position', [120, 120, 1100, 420]);
-boxplot(metrics_matrix, 'Labels', {'Phase RMSE (deg)','PSLR (dB)','ISLR (dB)','PAPR (dB)','Mainlobe Width (us)'});
+% 可视化：五个指标箱型图（相对频谱误差 + PSLR + ISLR + PAPR + 主瓣宽度）
+metrics_matrix = [restoration_error_vec, pslr_perturb_vec, islr_perturb_vec, papr_perturb_vec, mlw_perturb_vec];
+figure('Position', [120, 120, 1200, 420]);
+boxplot(metrics_matrix, 'Labels', {'spec NMSE','PSLR (dB)','ISLR (dB)','PAPR (dB)','Mainlobe Width (us)'});
 ylabel('Metric Value');
-title('扰动场景下五个指标箱型图（参数与rubust.m一致）');
+title('扰动场景下五个指标箱型图（误差按win_length步骤4.1）');
 grid on;
 
 
@@ -699,21 +702,28 @@ for k = 1:K
 end
 end
 
-function err = evaluate_reference_error_phase(s_cmp, S_ideal_k, N_pulse, N_fft, freq, B)
-% 对齐win_length.m步骤4.1：先归一化并转到频域，再在带内计算误差
+function E_spec = compute_spectrum_error(S_ideal_k, S_out_k, freq, B)
+% win_length.m步骤4.1中使用的带内归一化频谱相对误差
+band_idx = abs(freq)<=B/2;
+A = abs(S_ideal_k(band_idx));
+Bv = abs(S_out_k(band_idx));
+A = A / (norm(A,2) + eps);
+Bv = Bv / (norm(Bv,2) + eps);
+E_spec = (norm(Bv - A, 2)^2) / (norm(A, 2)^2 + eps);
+end
+
+function err = evaluate_reference_error(s_cmp, S_ideal_k, N_pulse, N_fft, freq, B)
+% win_length.m步骤4.1中用于restoration error和time error的计算方式
 s_ideal = ifft(S_ideal_k, N_fft);
 s_ideal = s_ideal(1:N_pulse);
 s_ideal = s_ideal / sqrt(sum(abs(s_ideal).^2) + eps);
 s_cmp = s_cmp / sqrt(sum(abs(s_cmp).^2) + eps);
 
+err.time_nmse = norm(s_cmp - s_ideal, 2)^2 / (norm(s_ideal,2)^2 + eps);
+
 s_cmp_pad = zeros(N_fft,1);
 s_cmp_pad(1:N_pulse) = s_cmp;
 S_cmp = fft(s_cmp_pad, N_fft);
-
-band_idx = abs(freq)<=B/2;
-phase_diff = angle(S_cmp(band_idx)) - angle(S_ideal_k(band_idx));
-phase_diff = angle(exp(1j*phase_diff)); % wrap到[-pi,pi]
-
-err.phase_rmse_rad = sqrt(mean(phase_diff.^2));
-err.phase_rmse_deg = err.phase_rmse_rad * 180/pi;
+err.spec_nmse = compute_spectrum_error(S_ideal_k, S_cmp, freq, B);
 end
+
