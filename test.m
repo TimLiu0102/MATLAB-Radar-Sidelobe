@@ -407,8 +407,8 @@ fprintf('\nISLR - 仅预补偿不加窗: %.2f dB\n', islr_precomp_only);
 
 %% 步骤10: 不同B、T_pulse（fs=60e6）鲁棒性分析（1x2子图）
 fs_robust = 60e6;
-B_sweep_MHz = [10, 20, 30, 40];
-Tp_sweep_us = [10, 20, 30, 40];
+B_sweep_MHz = [10, 15, 20, 25, 30,35, 40];
+Tp_sweep_us = [10, 15, 20, 25, 30,35, 40];
 
 % 图A: 扫描B，固定T_pulse
 T_fix = T_pulse;
