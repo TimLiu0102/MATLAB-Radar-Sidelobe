@@ -16,6 +16,13 @@ freq = (-N_fft/2:N_fft/2-1) * (fs/N_fft);  % 频率轴
 alpha_reg = 1e-2;       % 正则化因子系数（增大了）
 A_max = 4.0;            % 最大增益限制（适当增大）
 
+% Gaussian perturbation with zero mean
+mu_a = 0;
+sigma_a = 0.05;          % sigma_a = 0.05
+mu_phi = 0;
+sigma_phi_deg = 5;       % sigma_phi = 5 degree
+sigma_phi = sigma_phi_deg * pi / 180;
+
 % 显示参数
 f_center_idx = find(abs(freq)<=B/2);
 
@@ -84,12 +91,16 @@ xlabel('频率 (MHz)'); ylabel('幅度 (dB)');
 title('原始LFM频谱（矩形频谱）');
 grid on;
 
-%% 步骤2: 计算发射端预补偿谱（幅度+相位全补偿）
-% 计算正则化项：使用均值而不是最大值，更稳定
-epsilon = alpha_reg / mean(abs(H_k .* S_LFM_k));
+%% 步骤2: 计算发射端预补偿谱（固定统计鲁棒预补偿）
+% fixed robust pre-compensation filter designed from perturbation statistics
+A_nom = abs(H_k);
+phi_nom = angle(H_k);
 
-% 核心补偿公式：G_tx[k] = R[k] / (H[k] * S_LFM[k] + ε)
-G_tx_k = R_k ./ (H_k .* S_LFM_k + epsilon);
+E_H_conj = A_nom .* (1 + mu_a) .* exp(-1j * (phi_nom + mu_phi)) .* exp(-(sigma_phi^2)/2);
+E_absH2 = (A_nom.^2) .* ((1 + mu_a)^2 + sigma_a^2);
+lambda_0 = alpha_reg;
+
+G_tx_k = (conj(S_LFM_k) .* E_H_conj .* R_k) ./ (abs(S_LFM_k).^2 .* E_absH2 + lambda_0);
 
 % 幅度限制：防止过高的增益导致PA饱和
 G_tx_mag = abs(G_tx_k);
@@ -405,15 +416,17 @@ fprintf('PAPR - 仅预补偿不加窗: %.2f dB（增加 %.2f dB）\n', PAPR_prec
 fprintf('\nISLR - 仅预补偿不加窗: %.2f dB\n', islr_precomp_only);
 
 
-%% 步骤10: 引入rubust.m扰动并按win_length.m步骤4.1计算相位误差
-% 采用rubust.m中的建模方式：H_pert = H_nominal .* (1+eps_a) .* exp(1j*eps_phi)
+%% 步骤10: 20个高斯扰动场景评估（固定鲁棒预补偿滤波器）
+% 20 Monte Carlo perturbation scenarios for evaluation
 K_perturb = 20;
-delta_a = 0.05;          % 幅度扰动上限（±5%，与rubust.m一致）
-delta_phi = 5*pi/180;    % 相位扰动上限（±5°，与rubust.m一致）
 
-% 注意：H_k已经fftshift到FFT顺序，因此扰动索引也要切换到FFT顺序带内索引
 f_center_idx_fft = find(abs(ifftshift(freq))<=B/2);
-H_scenarios = build_perturbed_channels(H_k, f_center_idx_fft, K_perturb, delta_a, delta_phi);
+H_scenarios = build_perturbed_channels(H_k, f_center_idx_fft, K_perturb, mu_a, sigma_a, mu_phi, sigma_phi);
+
+fprintf('\n=== 鲁棒设计参数 ===\n');
+fprintf('mu_a = %.4f, sigma_a = %.4f\n', mu_a, sigma_a);
+fprintf('mu_phi = %.4f rad, sigma_phi = %.4f rad (%.2f deg)\n', mu_phi, sigma_phi, sigma_phi_deg);
+fprintf('扰动场景数 K = %d\n', K_perturb);
 
 restoration_error_vec = zeros(K_perturb,1);
 time_error_vec = zeros(K_perturb,1);
@@ -425,21 +438,11 @@ mlw_perturb_vec = zeros(K_perturb,1);
 for k = 1:K_perturb
     H_case = H_scenarios(:,k);
 
-    % 按win_length.m步骤4.1：在扰动后的H(f)下重新做预补偿（不加窗）
-    epsilon_i = 0.01;
-    G_tx_i = R_k ./ (H_case .* S_LFM_k + epsilon_i);
-
-    % 幅度限制
-    G_tx_i_mag = abs(G_tx_i);
-    if max(G_tx_i_mag) > A_max
-        G_tx_i = G_tx_i ./ max(1, G_tx_i_mag/A_max);
-    end
-
-    % 发射频谱 + 扰动系统响应后频谱
-    S_tx_i = S_LFM_k .* G_tx_i;
+    % 使用固定鲁棒预补偿滤波器 + 窗函数评估扰动场景
+    S_tx_i = S_LFM_k .* G_tx_k_windowed;
     S_rx_i = S_tx_i .* H_case;
 
-    % 扰动后+预补偿信号与原始LFM做误差比较（win_length步骤4.1）
+    % 扰动后+固定预补偿信号与原始LFM做误差比较（win_length步骤4.1）
     s_cmp_i = ifft(S_rx_i, N_fft);
     s_cmp_i = s_cmp_i(1:N_pulse);
     err_case = evaluate_reference_error(s_cmp_i, S_LFM_k, N_pulse, N_fft, freq, B);
@@ -449,7 +452,6 @@ for k = 1:K_perturb
     % 归一化后用于PSLR/ISLR/PAPR/主瓣宽度评估
     s_rx_case = s_cmp_i / sqrt(sum(abs(s_cmp_i).^2) + eps);
 
-    % 用test.m已有方式计算四个指标
     auto_corr_case = xcorr(s_rx_case, s_rx_case);
     auto_corr_case = auto_corr_case / (max(abs(auto_corr_case)) + eps);
     center_idx_case = ceil(length(auto_corr_case)/2);
@@ -461,8 +463,8 @@ for k = 1:K_perturb
 end
 
 fprintf('\n=== 扰动信道下指标统计（K=%d）===\n', K_perturb);
-fprintf('恢复误差(加扰动H后预补偿) spec_nmse: 均值=%.6f, 最大=%.6f\n', mean(restoration_error_vec), max(restoration_error_vec));
-fprintf('恢复误差(加扰动H后预补偿) time_nmse: 均值=%.6f, 最大=%.6f\n', mean(time_error_vec), max(time_error_vec));
+fprintf('恢复误差(固定鲁棒预补偿) spec_nmse: 均值=%.6f, 最大=%.6f\n', mean(restoration_error_vec), max(restoration_error_vec));
+fprintf('恢复误差(固定鲁棒预补偿) time_nmse: 均值=%.6f, 最大=%.6f\n', mean(time_error_vec), max(time_error_vec));
 fprintf('PSLR(dB): 均值=%.4f, 最差=%.4f\n', mean(pslr_perturb_vec), max(pslr_perturb_vec));
 fprintf('ISLR(dB): 均值=%.4f, 最差=%.4f\n', mean(islr_perturb_vec), max(islr_perturb_vec));
 fprintf('PAPR(dB): 均值=%.4f, 最大=%.4f\n', mean(papr_perturb_vec), max(papr_perturb_vec));
@@ -473,7 +475,7 @@ metrics_matrix = [restoration_error_vec, pslr_perturb_vec, islr_perturb_vec, pap
 figure('Position', [120, 120, 1200, 420]);
 boxplot(metrics_matrix, 'Labels', {'restoration spec NMSE','PSLR (dB)','ISLR (dB)','PAPR (dB)','Mainlobe Width (us)'});
 ylabel('Metric Value');
-title('扰动场景下五个指标箱型图（误差按win_length步骤4.1）');
+title('20个高斯扰动场景下固定鲁棒预补偿性能箱型图');
 grid on;
 
 
@@ -570,8 +572,18 @@ s_lfm_padded(1:N_pulse) = s_lfm;
 S_LFM_k = fft(s_lfm_padded, N_fft);
 R_k = S_LFM_k;
 
-epsilon = alpha_reg / mean(abs(H_k .* S_LFM_k));
-G_tx_k = R_k ./ (H_k .* S_LFM_k + epsilon);
+mu_a = 0;
+sigma_a = 0.05;          % sigma_a = 0.05
+mu_phi = 0;
+sigma_phi_deg = 5;       % sigma_phi = 5 degree
+sigma_phi = sigma_phi_deg * pi / 180;
+
+A_nom = abs(H_k);
+phi_nom = angle(H_k);
+E_H_conj = A_nom .* (1 + mu_a) .* exp(-1j * (phi_nom + mu_phi)) .* exp(-(sigma_phi^2)/2);
+E_absH2 = (A_nom.^2) .* ((1 + mu_a)^2 + sigma_a^2);
+lambda_0 = alpha_reg;
+G_tx_k = (conj(S_LFM_k) .* E_H_conj .* R_k) ./ (abs(S_LFM_k).^2 .* E_absH2 + lambda_0);
 G_tx_mag = abs(G_tx_k);
 if max(G_tx_mag) > A_max
     G_tx_k = G_tx_k ./ max(1, G_tx_mag/A_max);
@@ -700,15 +712,22 @@ function bw_3db = compute_3db_width_corrected(corr_signal, peak_idx, fs, B)
 end
 
 
-function H_scenarios = build_perturbed_channels(H_nominal, inband_idx, K, delta_a, delta_phi)
+function H_scenarios = build_perturbed_channels(H_nominal, inband_idx, K, mu_a, sigma_a, mu_phi, sigma_phi)
 N = numel(H_nominal);
 H_scenarios = repmat(H_nominal, 1, K);
 
 for k = 1:K
     eps_a = zeros(N,1);
     eps_phi = zeros(N,1);
-    eps_a(inband_idx) = -delta_a + 2*delta_a*rand(numel(inband_idx),1);
-    eps_phi(inband_idx) = -delta_phi + 2*delta_phi*rand(numel(inband_idx),1);
+
+    % Gaussian perturbation with zero mean
+    eps_a(inband_idx) = mu_a + sigma_a * randn(numel(inband_idx),1);
+    eps_phi(inband_idx) = mu_phi + sigma_phi * randn(numel(inband_idx),1);
+
+    % 避免 1 + eps_a <= 0
+    eps_a = max(eps_a, -0.95);
+
+    % 扰动仅在带内生效，带外保持0
     H_scenarios(:,k) = H_nominal .* (1 + eps_a) .* exp(1j*eps_phi);
 end
 end
@@ -737,4 +756,3 @@ s_cmp_pad(1:N_pulse) = s_cmp;
 S_cmp = fft(s_cmp_pad, N_fft);
 err.spec_nmse = compute_spectrum_error(S_ideal_k, S_cmp, freq, B);
 end
-
