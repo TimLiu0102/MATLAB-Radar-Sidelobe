@@ -513,8 +513,8 @@ s_out_selected_time = ifft(S_out_selected, N_fft);
 s_out_selected = s_out_selected_time(1:N_pulse);
 s_out_selected = s_out_selected / sqrt(sum(abs(s_out_selected).^2) + eps);
 
-% R(f): 预补偿之后的信号（不加窗）
-R_selected = S_LFM_k .* G_tx_k;
+% R(f): 预补偿后再通过扰动系统的信号（不加窗）
+R_selected = S_LFM_k .* G_tx_k .* H_selected;
 s_ref_time = ifft(R_selected, N_fft);
 s_ref = s_ref_time(1:N_pulse);
 s_ref = s_ref / sqrt(sum(abs(s_ref).^2) + eps);
@@ -583,17 +583,16 @@ mlw_lfm = compute_3db_width_corrected(auto_corr_ideal_sel, center_idx_ideal_sel,
 papr_lfm = 10*log10(max(abs(s_ideal).^2) / mean(abs(s_ideal).^2));
 err_lfm = evaluate_reference_error(s_ideal, S_LFM_k, N_pulse, N_fft, freq, B);
 
-auto_corr_ref = xcorr(s_ref, s_ref);
-auto_corr_ref = auto_corr_ref / (max(abs(auto_corr_ref)) + eps);
-center_idx_ref = ceil(length(auto_corr_ref)/2);
-pslr_ref = compute_pslr_corrected(auto_corr_ref, center_idx_ref, fs, B);
-islr_ref = compute_islr_corrected(auto_corr_ref, center_idx_ref, fs, B);
-mlw_ref = compute_3db_width_corrected(auto_corr_ref, center_idx_ref, fs, B);
-papr_ref = 10*log10(max(abs(s_ref).^2) / mean(abs(s_ref).^2));
-err_ref = evaluate_reference_error(s_ref, S_LFM_k, N_pulse, N_fft, freq, B);
+% R的指标直接使用20场景中“固定鲁棒预补偿+扰动系统”的同索引结果
+pslr_ref = pslr_perturb_vec(selected_case_idx);
+islr_ref = islr_perturb_vec(selected_case_idx);
+mlw_ref = mlw_perturb_vec(selected_case_idx);
+papr_ref = papr_perturb_vec(selected_case_idx);
+err_ref.spec_nmse = restoration_error_vec(selected_case_idx);
+err_ref.time_nmse = time_error_vec(selected_case_idx);
 
 fprintf('\n=== 最坏扰动场景详细对比（场景 #%d，不加窗）===\n', selected_case_idx);
-fprintf('定义: S_out(f)=S_{LFM}(f)*H_{pert}(f), R(f)=S_{LFM}(f)*G_{tx}(f)\n');
+fprintf('定义: S_out(f)=S_{LFM}(f)*H_{pert}(f), R(f)=S_{LFM}(f)*G_{tx}(f)*H_{pert}(f)\n');
 fprintf('校验: 该场景指标直接来自20场景向量索引 #%d\n', selected_case_idx);
 fprintf('PSLR(dB): LFM=%.4f, S_out=%.4f, R=%.4f\n', pslr_lfm, pslr_selected, pslr_ref);
 fprintf('ISLR(dB): LFM=%.4f, S_out=%.4f, R=%.4f\n', islr_lfm, islr_selected, islr_ref);
