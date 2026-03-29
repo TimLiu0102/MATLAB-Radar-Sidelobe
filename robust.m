@@ -438,8 +438,8 @@ mlw_perturb_vec = zeros(K_perturb,1);
 for k = 1:K_perturb
     H_case = H_scenarios(:,k);
 
-    % 使用固定鲁棒预补偿滤波器 + 窗函数评估扰动场景
-    S_tx_i = S_LFM_k .* G_tx_k_windowed;
+    % 使用固定鲁棒预补偿滤波器（不加窗）评估扰动场景
+    S_tx_i = S_LFM_k .* G_tx_k;
     S_rx_i = S_tx_i .* H_case;
 
     % 扰动后+固定预补偿信号与原始LFM做误差比较（win_length步骤4.1）
@@ -478,78 +478,69 @@ ylabel('Metric Value');
 title('20个高斯扰动场景下固定鲁棒预补偿性能箱型图');
 grid on;
 
-%% 步骤10.1: 从20个扰动场景中选取一个做详细频域/指标对比
-selected_case_idx = 1;  % 可修改为1~20中的任意场景
+%% 步骤10.1: 选取最坏扰动场景做详细频域/指标对比（不加窗）
+[~, selected_case_idx] = max(restoration_error_vec);  % 最坏场景：按频谱恢复误差最大
 H_selected = H_scenarios(:, selected_case_idx);
 
-% 固定鲁棒预补偿滤波器在该扰动场景下的输出
-S_tx_selected = S_LFM_k .* G_tx_k_windowed;
+% 固定鲁棒预补偿滤波器在该扰动场景下的输出（不加窗）
+S_tx_selected = S_LFM_k .* G_tx_k;
 S_out_selected = S_tx_selected .* H_selected;
 s_out_selected_time = ifft(S_out_selected, N_fft);
 s_out_selected = s_out_selected_time(1:N_pulse);
 s_out_selected = s_out_selected / sqrt(sum(abs(s_out_selected).^2) + eps);
 
-% 参考信号R(f)
-R_selected = R_k;
+% 参考信号 R(f) 对应时域信号
+s_ref_time = ifft(R_k, N_fft);
+s_ref = s_ref_time(1:N_pulse);
+s_ref = s_ref / sqrt(sum(abs(s_ref).^2) + eps);
 
-% 为频谱绘图准备时域信号（与用户给定相位绘图格式保持一致）
+% 为频谱绘图准备时域信号
 s_ideal_padded = zeros(N_fft, 1);
 s_ideal_padded(1:N_pulse) = s_ideal;
 
 s_with_H_padded = zeros(N_fft, 1);
 s_with_H_padded(1:N_pulse) = s_out_selected;          % 这里对应 S_out(f)
 
-s_tx_with_H_padded = zeros(N_fft, 1);
-s_tx_with_H_padded(1:N_pulse) = s_tx_pulse;           % 这里对应 S_tx(f)
+s_ref_padded = zeros(N_fft, 1);
+s_ref_padded(1:N_pulse) = s_ref;                      % 这里对应 R(f)
 
-% LFM时域波形
+% LFM时域波形（LFM / s_out / r）
 figure(7);
 plot(t*1e6, real(s_ideal), 'k-', 'LineWidth', 1.5); hold on;
 plot(t*1e6, real(s_out_selected), 'r--', 'LineWidth', 1.5);
-plot(t*1e6, real(s_tx_pulse), 'b-.', 'LineWidth', 1.5);
+plot(t*1e6, real(s_ref), 'b-.', 'LineWidth', 1.5);
 xlabel('Time (\mus)'); ylabel('Amplitude');
 title(sprintf('Selected Scenario #%d: Time-Domain LFM Comparison', selected_case_idx));
-legend('LFM', 's_{out}(t)', 's_{tx}(t)', 'Location', 'best');
+legend('LFM', 's_{out}(t)', 'r(t)', 'Location', 'best');
 grid on;
 
-% 幅值响应对比：LFM、S_out(f)、R(f)、S_tx(f)
+% 幅值响应对比：LFM、S_out(f)、R(f)
 figure(8);
 S_ideal_sel = fftshift(fft(s_ideal_padded, N_fft));
 S_out_sel = fftshift(fft(s_with_H_padded, N_fft));
-S_tx_sel = fftshift(fft(s_tx_with_H_padded, N_fft));
-R_sel_shift = fftshift(R_selected);
+R_sel_shift = fftshift(fft(s_ref_padded, N_fft));
 
 plot(freq/1e6, 20*log10(abs(S_ideal_sel)/max(abs(S_ideal_sel)) + 1e-12), 'k-', 'LineWidth', 1.5); hold on;
 plot(freq/1e6, 20*log10(abs(S_out_sel)/max(abs(S_out_sel)) + 1e-12), 'r--', 'LineWidth', 1.5);
 plot(freq/1e6, 20*log10(abs(R_sel_shift)/max(abs(R_sel_shift)) + 1e-12), 'g:', 'LineWidth', 1.5);
-plot(freq/1e6, 20*log10(abs(S_tx_sel)/max(abs(S_tx_sel)) + 1e-12), 'b-.', 'LineWidth', 1.5);
 xlim([-B/1e6*1.5, B/1e6*1.5]);
 xlabel('Frequency (MHz)'); ylabel('Magnitude (dB)');
-legend('LFM', 'S_{out}(f)', 'R(f)', 'S_{tx}(f)', 'Location', 'best');
-title(sprintf('Selected Scenario #%d: Magnitude Response Comparison', selected_case_idx));
+legend('LFM', 'S_{out}(f)', 'R(f)', 'Location', 'best');
+title(sprintf('Worst Scenario #%d: Magnitude Response Comparison (No Window)', selected_case_idx));
 grid on;
 
 % 相位响应对比（按用户给定格式）
 figure(9);
 plot(freq/1e6, unwrap(angle(fftshift(fft(s_ideal_padded, N_fft)))), 'k-', 'LineWidth', 1.5); hold on;
 plot(freq/1e6, unwrap(angle(fftshift(fft(s_with_H_padded, N_fft)))), 'r--', 'LineWidth', 1.5);
-plot(freq/1e6, unwrap(angle(fftshift(fft(s_tx_with_H_padded, N_fft)))), 'b-.', 'LineWidth', 1.5);
+plot(freq/1e6, unwrap(angle(fftshift(fft(s_ref_padded, N_fft)))), 'g:', 'LineWidth', 1.5);
 xlim([-B/1e6*1.5, B/1e6*1.5]);
 xlabel('Frequency (MHz)'); ylabel('Phase (rad)');
-legend('LFM', 'S_{out}(f)','S_{tx}(f)', 'Location', 'best');
+legend('LFM', 'S_{out}(f)','R(f)', 'Location', 'best');
+title(sprintf('Worst Scenario #%d: Phase Response Comparison (No Window)', selected_case_idx));
 grid on;
 
-% 额外补充R(f)相位对比
-figure(10);
-plot(freq/1e6, unwrap(angle(fftshift(fft(s_with_H_padded, N_fft)))), 'r--', 'LineWidth', 1.5); hold on;
-plot(freq/1e6, unwrap(angle(R_sel_shift)), 'g:', 'LineWidth', 1.5);
-xlim([-B/1e6*1.5, B/1e6*1.5]);
-xlabel('Frequency (MHz)'); ylabel('Phase (rad)');
-legend('S_{out}(f)', 'R(f)', 'Location', 'best');
-title(sprintf('Selected Scenario #%d: Phase Comparison of S_{out}(f) and R(f)', selected_case_idx));
-grid on;
-
-% 选中扰动场景的指标计算
+% 最坏扰动场景的指标计算
 auto_corr_selected = xcorr(s_out_selected, s_out_selected);
 auto_corr_selected = auto_corr_selected / (max(abs(auto_corr_selected)) + eps);
 center_idx_selected = ceil(length(auto_corr_selected)/2);
@@ -560,23 +551,43 @@ mlw_selected = compute_3db_width_corrected(auto_corr_selected, center_idx_select
 papr_selected = 10*log10(max(abs(s_out_selected).^2) / mean(abs(s_out_selected).^2));
 err_selected = evaluate_reference_error(s_out_selected, S_LFM_k, N_pulse, N_fft, freq, B);
 
-fprintf('\n=== 单个扰动场景详细对比（场景 #%d）===\n', selected_case_idx);
-fprintf('PSLR(dB): 名义有预补偿=%.4f, 扰动场景=%.4f\n', pslr_with_comp, pslr_selected);
-fprintf('ISLR(dB): 名义有预补偿=%.4f, 扰动场景=%.4f\n', islr_with_comp, islr_selected);
-fprintf('主瓣宽度(us): 名义有预补偿=%.4f, 扰动场景=%.4f\n', bw3db_with_comp, mlw_selected);
-fprintf('PAPR(dB): 名义有预补偿=%.4f, 扰动场景=%.4f\n', PAPR_with_comp, papr_selected);
-fprintf('恢复误差(spec_nmse): 均值=%.6f, 选中场景=%.6f\n', mean(restoration_error_vec), err_selected.spec_nmse);
-fprintf('恢复误差(time_nmse): 均值=%.6f, 选中场景=%.6f\n', mean(time_error_vec), err_selected.time_nmse);
+% LFM和R的指标
+auto_corr_ideal_sel = xcorr(s_ideal, s_ideal);
+auto_corr_ideal_sel = auto_corr_ideal_sel / (max(abs(auto_corr_ideal_sel)) + eps);
+center_idx_ideal_sel = ceil(length(auto_corr_ideal_sel)/2);
+pslr_lfm = compute_pslr_corrected(auto_corr_ideal_sel, center_idx_ideal_sel, fs, B);
+islr_lfm = compute_islr_corrected(auto_corr_ideal_sel, center_idx_ideal_sel, fs, B);
+mlw_lfm = compute_3db_width_corrected(auto_corr_ideal_sel, center_idx_ideal_sel, fs, B);
+papr_lfm = 10*log10(max(abs(s_ideal).^2) / mean(abs(s_ideal).^2));
+err_lfm = evaluate_reference_error(s_ideal, S_LFM_k, N_pulse, N_fft, freq, B);
 
-% 五项指标对比柱状图
-figure(11);
-metric_nominal = [pslr_with_comp, islr_with_comp, bw3db_with_comp, PAPR_with_comp, mean(restoration_error_vec)];
+auto_corr_ref = xcorr(s_ref, s_ref);
+auto_corr_ref = auto_corr_ref / (max(abs(auto_corr_ref)) + eps);
+center_idx_ref = ceil(length(auto_corr_ref)/2);
+pslr_ref = compute_pslr_corrected(auto_corr_ref, center_idx_ref, fs, B);
+islr_ref = compute_islr_corrected(auto_corr_ref, center_idx_ref, fs, B);
+mlw_ref = compute_3db_width_corrected(auto_corr_ref, center_idx_ref, fs, B);
+papr_ref = 10*log10(max(abs(s_ref).^2) / mean(abs(s_ref).^2));
+err_ref = evaluate_reference_error(s_ref, S_LFM_k, N_pulse, N_fft, freq, B);
+
+fprintf('\n=== 最坏扰动场景详细对比（场景 #%d，不加窗）===\n', selected_case_idx);
+fprintf('PSLR(dB): LFM=%.4f, S_out=%.4f, R=%.4f\n', pslr_lfm, pslr_selected, pslr_ref);
+fprintf('ISLR(dB): LFM=%.4f, S_out=%.4f, R=%.4f\n', islr_lfm, islr_selected, islr_ref);
+fprintf('主瓣宽度(us): LFM=%.4f, S_out=%.4f, R=%.4f\n', mlw_lfm, mlw_selected, mlw_ref);
+fprintf('PAPR(dB): LFM=%.4f, S_out=%.4f, R=%.4f\n', papr_lfm, papr_selected, papr_ref);
+fprintf('恢复误差(spec_nmse): LFM=%.6f, S_out=%.6f, R=%.6f\n', err_lfm.spec_nmse, err_selected.spec_nmse, err_ref.spec_nmse);
+fprintf('恢复误差(time_nmse): LFM=%.6f, S_out=%.6f, R=%.6f\n', err_lfm.time_nmse, err_selected.time_nmse, err_ref.time_nmse);
+
+% 五项指标对比柱状图（LFM / S_out / R）
+figure(10);
+metric_lfm = [pslr_lfm, islr_lfm, mlw_lfm, papr_lfm, err_lfm.spec_nmse];
 metric_selected = [pslr_selected, islr_selected, mlw_selected, papr_selected, err_selected.spec_nmse];
-bar([metric_nominal; metric_selected]');
+metric_ref = [pslr_ref, islr_ref, mlw_ref, papr_ref, err_ref.spec_nmse];
+bar([metric_lfm; metric_selected; metric_ref]');
 set(gca, 'XTickLabel', {'PSLR(dB)', 'ISLR(dB)', 'Mainlobe Width(us)', 'PAPR(dB)', 'Restoration NMSE'});
-legend('Nominal (with comp)', sprintf('Scenario #%d', selected_case_idx), 'Location', 'best');
+legend('LFM', sprintf('Worst S_{out} #%d', selected_case_idx), 'R', 'Location', 'best');
 ylabel('Metric Value');
-title('Metric Comparison: Nominal vs Selected Perturbation Scenario');
+title('Metric Comparison: LFM vs Worst S_{out} vs R (No Window)');
 grid on;
 
 
