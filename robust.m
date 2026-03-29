@@ -482,15 +482,15 @@ grid on;
 [~, selected_case_idx] = max(restoration_error_vec);  % 最坏场景：按频谱恢复误差最大
 H_selected = H_scenarios(:, selected_case_idx);
 
-% 固定鲁棒预补偿滤波器在该扰动场景下的输出（不加窗）
-S_tx_selected = S_LFM_k .* G_tx_k;
-S_out_selected = S_tx_selected .* H_selected;
+% S_out(f): LFM信号通过扰动系统后的信号（不含预补偿）
+S_out_selected = S_LFM_k .* H_selected;
 s_out_selected_time = ifft(S_out_selected, N_fft);
 s_out_selected = s_out_selected_time(1:N_pulse);
 s_out_selected = s_out_selected / sqrt(sum(abs(s_out_selected).^2) + eps);
 
-% 参考信号 R(f) 对应时域信号
-s_ref_time = ifft(R_k, N_fft);
+% R(f): 预补偿之后的信号（不加窗）
+R_selected = S_LFM_k .* G_tx_k;
+s_ref_time = ifft(R_selected, N_fft);
 s_ref = s_ref_time(1:N_pulse);
 s_ref = s_ref / sqrt(sum(abs(s_ref).^2) + eps);
 
@@ -540,7 +540,7 @@ legend('LFM', 'S_{out}(f)','R(f)', 'Location', 'best');
 title(sprintf('Worst Scenario #%d: Phase Response Comparison (No Window)', selected_case_idx));
 grid on;
 
-% 最坏扰动场景的指标计算
+% 最坏扰动场景下 S_out 的指标计算
 auto_corr_selected = xcorr(s_out_selected, s_out_selected);
 auto_corr_selected = auto_corr_selected / (max(abs(auto_corr_selected)) + eps);
 center_idx_selected = ceil(length(auto_corr_selected)/2);
@@ -571,6 +571,7 @@ papr_ref = 10*log10(max(abs(s_ref).^2) / mean(abs(s_ref).^2));
 err_ref = evaluate_reference_error(s_ref, S_LFM_k, N_pulse, N_fft, freq, B);
 
 fprintf('\n=== 最坏扰动场景详细对比（场景 #%d，不加窗）===\n', selected_case_idx);
+fprintf('定义: S_out(f)=S_{LFM}(f)*H_{pert}(f), R(f)=S_{LFM}(f)*G_{tx}(f)\n');
 fprintf('PSLR(dB): LFM=%.4f, S_out=%.4f, R=%.4f\n', pslr_lfm, pslr_selected, pslr_ref);
 fprintf('ISLR(dB): LFM=%.4f, S_out=%.4f, R=%.4f\n', islr_lfm, islr_selected, islr_ref);
 fprintf('主瓣宽度(us): LFM=%.4f, S_out=%.4f, R=%.4f\n', mlw_lfm, mlw_selected, mlw_ref);
