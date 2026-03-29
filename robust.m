@@ -541,7 +541,7 @@ grid on;
 
 % 幅值与相位响应合并图：LFM、S_out(f)、R(f)
 figure(8);
-set(gcf, 'Position', [180, 120, 1280, 460], 'Color', [1 1 1]);
+set(gcf, 'Color', [1 1 1]);
 tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
 
 % 左图：幅值响应
