@@ -151,10 +151,10 @@ PAPR_lfm_ref = compute_papr(s_ideal);
 %% NEW: 优化广义余弦窗设计
 %% NEW: 萤火虫算法优化
 rng(20);
-lambda1 = 10;
-lambda2 = 25;
-w_pslr = 6;
-w_islr = 6;
+lambda1 = 0.21;
+lambda2 = 0.54;
+w_pslr = 0.13;
+w_islr = 0.12;
 fa_opt.pop_size = 30;
 fa_opt.max_iter = 50;
 fa_opt.beta0 = 1;
