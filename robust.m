@@ -539,8 +539,13 @@ title(sprintf('Selected Scenario #%d: Time-Domain LFM Comparison', selected_case
 legend('LFM', 's_{out}(t)', 'r(t)', 'Location', 'best');
 grid on;
 
-% 幅值响应对比：LFM、S_out(f)、R(f)
+% 幅值与相位响应合并图：LFM、S_out(f)、R(f)
 figure(8);
+set(gcf, 'Position', [180, 120, 1280, 460], 'Color', [1 1 1]);
+tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
+
+% 左图：幅值响应
+nexttile;
 S_ideal_sel = fftshift(fft(s_ideal_padded, N_fft));
 S_out_sel = fftshift(fft(s_with_H_padded, N_fft));
 R_sel_shift = fftshift(fft(s_ref_padded, N_fft));
@@ -554,8 +559,8 @@ legend('LFM', 'S_{out}(f)', 'R(f)', 'Location', 'best');
 title(sprintf('Worst Scenario #%d: Magnitude Response Comparison (No Window)', selected_case_idx));
 grid on;
 
-% 相位响应对比（按用户给定格式）
-figure(9);
+% 右图：相位响应对比
+nexttile;
 plot(freq/1e6, unwrap(angle(fftshift(fft(s_ideal_padded, N_fft)))), 'k-', 'LineWidth', 1.5); hold on;
 plot(freq/1e6, unwrap(angle(fftshift(fft(s_with_H_padded, N_fft)))), 'r--', 'LineWidth', 1.5);
 plot(freq/1e6, unwrap(angle(fftshift(fft(s_ref_padded, N_fft)))), 'g:', 'LineWidth', 1.5);
