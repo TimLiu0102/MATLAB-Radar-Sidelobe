@@ -435,6 +435,14 @@ islr_perturb_vec = zeros(K_perturb,1);
 papr_perturb_vec = zeros(K_perturb,1);
 mlw_perturb_vec = zeros(K_perturb,1);
 
+% 按用户定义的 S_out(f)=S_LFM(f)*H_pert(f) 记录20场景指标（不含预补偿）
+restoration_error_out_vec = zeros(K_perturb,1);
+time_error_out_vec = zeros(K_perturb,1);
+pslr_out_vec = zeros(K_perturb,1);
+islr_out_vec = zeros(K_perturb,1);
+papr_out_vec = zeros(K_perturb,1);
+mlw_out_vec = zeros(K_perturb,1);
+
 for k = 1:K_perturb
     H_case = H_scenarios(:,k);
 
@@ -460,6 +468,23 @@ for k = 1:K_perturb
     islr_perturb_vec(k) = compute_islr_corrected(auto_corr_case, center_idx_case, fs, B);
     mlw_perturb_vec(k) = compute_3db_width_corrected(auto_corr_case, center_idx_case, fs, B);
     papr_perturb_vec(k) = 10*log10(max(abs(s_rx_case).^2) / mean(abs(s_rx_case).^2));
+
+    % 记录 S_out(f)=S_LFM(f)*H_pert(f) 的同场景指标，确保后续“最坏场景”索引一致
+    S_out_case = S_LFM_k .* H_case;
+    s_out_case = ifft(S_out_case, N_fft);
+    s_out_case = s_out_case(1:N_pulse);
+    err_out_case = evaluate_reference_error(s_out_case, S_LFM_k, N_pulse, N_fft, freq, B);
+    restoration_error_out_vec(k) = err_out_case.spec_nmse;
+    time_error_out_vec(k) = err_out_case.time_nmse;
+
+    s_out_case = s_out_case / sqrt(sum(abs(s_out_case).^2) + eps);
+    auto_corr_out_case = xcorr(s_out_case, s_out_case);
+    auto_corr_out_case = auto_corr_out_case / (max(abs(auto_corr_out_case)) + eps);
+    center_idx_out_case = ceil(length(auto_corr_out_case)/2);
+    pslr_out_vec(k) = compute_pslr_corrected(auto_corr_out_case, center_idx_out_case, fs, B);
+    islr_out_vec(k) = compute_islr_corrected(auto_corr_out_case, center_idx_out_case, fs, B);
+    mlw_out_vec(k) = compute_3db_width_corrected(auto_corr_out_case, center_idx_out_case, fs, B);
+    papr_out_vec(k) = 10*log10(max(abs(s_out_case).^2) / mean(abs(s_out_case).^2));
 end
 
 fprintf('\n=== 扰动信道下指标统计（K=%d）===\n', K_perturb);
@@ -479,7 +504,7 @@ title('20个高斯扰动场景下固定鲁棒预补偿性能箱型图');
 grid on;
 
 %% 步骤10.1: 选取最坏扰动场景做详细频域/指标对比（不加窗）
-[~, selected_case_idx] = max(restoration_error_vec);  % 最坏场景：按频谱恢复误差最大
+[~, selected_case_idx] = max(restoration_error_out_vec);  % 最坏场景：按S_out频谱恢复误差最大
 H_selected = H_scenarios(:, selected_case_idx);
 
 % S_out(f): LFM信号通过扰动系统后的信号（不含预补偿）
@@ -540,16 +565,13 @@ legend('LFM', 'S_{out}(f)','R(f)', 'Location', 'best');
 title(sprintf('Worst Scenario #%d: Phase Response Comparison (No Window)', selected_case_idx));
 grid on;
 
-% 最坏扰动场景下 S_out 的指标计算
-auto_corr_selected = xcorr(s_out_selected, s_out_selected);
-auto_corr_selected = auto_corr_selected / (max(abs(auto_corr_selected)) + eps);
-center_idx_selected = ceil(length(auto_corr_selected)/2);
-
-pslr_selected = compute_pslr_corrected(auto_corr_selected, center_idx_selected, fs, B);
-islr_selected = compute_islr_corrected(auto_corr_selected, center_idx_selected, fs, B);
-mlw_selected = compute_3db_width_corrected(auto_corr_selected, center_idx_selected, fs, B);
-papr_selected = 10*log10(max(abs(s_out_selected).^2) / mean(abs(s_out_selected).^2));
-err_selected = evaluate_reference_error(s_out_selected, S_LFM_k, N_pulse, N_fft, freq, B);
+% 最坏扰动场景下 S_out 的指标（直接取自20场景统计向量，确保一定来自20场景）
+pslr_selected = pslr_out_vec(selected_case_idx);
+islr_selected = islr_out_vec(selected_case_idx);
+mlw_selected = mlw_out_vec(selected_case_idx);
+papr_selected = papr_out_vec(selected_case_idx);
+err_selected.spec_nmse = restoration_error_out_vec(selected_case_idx);
+err_selected.time_nmse = time_error_out_vec(selected_case_idx);
 
 % LFM和R的指标
 auto_corr_ideal_sel = xcorr(s_ideal, s_ideal);
@@ -572,6 +594,7 @@ err_ref = evaluate_reference_error(s_ref, S_LFM_k, N_pulse, N_fft, freq, B);
 
 fprintf('\n=== 最坏扰动场景详细对比（场景 #%d，不加窗）===\n', selected_case_idx);
 fprintf('定义: S_out(f)=S_{LFM}(f)*H_{pert}(f), R(f)=S_{LFM}(f)*G_{tx}(f)\n');
+fprintf('校验: 该场景指标直接来自20场景向量索引 #%d\n', selected_case_idx);
 fprintf('PSLR(dB): LFM=%.4f, S_out=%.4f, R=%.4f\n', pslr_lfm, pslr_selected, pslr_ref);
 fprintf('ISLR(dB): LFM=%.4f, S_out=%.4f, R=%.4f\n', islr_lfm, islr_selected, islr_ref);
 fprintf('主瓣宽度(us): LFM=%.4f, S_out=%.4f, R=%.4f\n', mlw_lfm, mlw_selected, mlw_ref);
