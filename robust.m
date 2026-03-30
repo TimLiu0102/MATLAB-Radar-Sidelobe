@@ -490,6 +490,8 @@ end
 fprintf('\n=== 扰动信道下指标统计（K=%d）===\n', K_perturb);
 fprintf('恢复误差(固定鲁棒预补偿) spec_nmse: 均值=%.6f, 最大=%.6f\n', mean(restoration_error_vec), max(restoration_error_vec));
 fprintf('恢复误差(固定鲁棒预补偿) time_nmse: 均值=%.6f, 最大=%.6f\n', mean(time_error_vec), max(time_error_vec));
+fprintf('通过系统后信号平均误差 spec_nmse (20次): %.6f\n', mean(restoration_error_out_vec));
+fprintf('通过系统后信号平均误差 time_nmse (20次): %.6f\n', mean(time_error_out_vec));
 fprintf('PSLR(dB): 均值=%.4f, 最差=%.4f\n', mean(pslr_perturb_vec), max(pslr_perturb_vec));
 fprintf('ISLR(dB): 均值=%.4f, 最差=%.4f\n', mean(islr_perturb_vec), max(islr_perturb_vec));
 fprintf('PAPR(dB): 均值=%.4f, 最大=%.4f\n', mean(papr_perturb_vec), max(papr_perturb_vec));
@@ -541,7 +543,7 @@ grid on;
 
 % 幅值与相位响应合并图：LFM、S_out(f)、R(f)
 figure(8);
-set(gcf, 'Color', [1 1 1]);
+set(gcf, 'Position', [180, 120, 1280, 460], 'Color', [1 1 1]);
 tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
 
 % 左图：幅值响应
