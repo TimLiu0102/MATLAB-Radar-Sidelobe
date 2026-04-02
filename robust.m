@@ -97,8 +97,9 @@ A_nom = abs(H_k);
 phi_nom = angle(H_k);
 
 E_H_conj = A_nom .* (1 + mu_a) .* exp(-1j * (phi_nom + mu_phi)) .* exp(-(sigma_phi^2)/2);
+E_H = A_nom .* (1 + mu_a) .* exp(1j * (phi_nom + mu_phi)) .* exp(-(sigma_phi^2)/2);
 E_absH2 = (A_nom.^2) .* ((1 + mu_a)^2 + sigma_a^2);
-lambda_0 = alpha_reg;
+lambda_0 = alpha_reg / mean(abs(E_H .* S_LFM_k) + eps);
 
 G_tx_k = (conj(S_LFM_k) .* E_H_conj .* R_k) ./ (abs(S_LFM_k).^2 .* E_absH2 + lambda_0);
 
@@ -751,8 +752,9 @@ sigma_phi = sigma_phi_deg * pi / 180;
 A_nom = abs(H_k);
 phi_nom = angle(H_k);
 E_H_conj = A_nom .* (1 + mu_a) .* exp(-1j * (phi_nom + mu_phi)) .* exp(-(sigma_phi^2)/2);
+E_H = A_nom .* (1 + mu_a) .* exp(1j * (phi_nom + mu_phi)) .* exp(-(sigma_phi^2)/2);
 E_absH2 = (A_nom.^2) .* ((1 + mu_a)^2 + sigma_a^2);
-lambda_0 = alpha_reg;
+lambda_0 = alpha_reg / mean(abs(E_H .* S_LFM_k) + eps);
 G_tx_k = (conj(S_LFM_k) .* E_H_conj .* R_k) ./ (abs(S_LFM_k).^2 .* E_absH2 + lambda_0);
 G_tx_mag = abs(G_tx_k);
 if max(G_tx_mag) > A_max
