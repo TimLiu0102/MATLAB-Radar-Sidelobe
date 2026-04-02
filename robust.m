@@ -102,9 +102,10 @@ lambda_0 = alpha_reg;
 
 G_tx_k = (conj(S_LFM_k) .* E_H_conj .* R_k) ./ (abs(S_LFM_k).^2 .* E_absH2 + lambda_0);
 
-% 对比方案：test.m中的全补偿滤波器（非统计鲁棒）
-epsilon_test = alpha_reg / mean(abs(H_k .* S_LFM_k) + eps);
-G_tx_test_k = R_k ./ (H_k .* S_LFM_k + epsilon_test);
+% 对比方案：严格使用test.m中的固定G_tx表达式（基于标称H_k一次性计算）
+% 注意：该G_tx在此处固定后，不随后续20次扰动场景变化
+epsilon_test = alpha_reg / mean(abs(H_k .* S_LFM_k));
+G_tx_test_k_fixed = R_k ./ (H_k .* S_LFM_k + epsilon_test);
 
 % 幅度限制：防止过高的增益导致PA饱和
 G_tx_mag = abs(G_tx_k);
@@ -115,9 +116,9 @@ if max_G > A_max
 end
 
 % test.m方案也施加同样的幅度限制，保证可比性
-G_tx_test_mag = abs(G_tx_test_k);
+G_tx_test_mag = abs(G_tx_test_k_fixed);
 if max(G_tx_test_mag) > A_max
-    G_tx_test_k = G_tx_test_k ./ max(1, G_tx_test_mag/A_max);
+    G_tx_test_k_fixed = G_tx_test_k_fixed ./ max(1, G_tx_test_mag/A_max);
 end
 
 % 显示补偿滤波器
@@ -470,7 +471,7 @@ for k = 1:K_perturb
     time_error_vec(k) = err_case.time_nmse;
 
     % 对比方案：test.m中的G_tx应用到同一扰动信道
-    S_tx_test_i = S_LFM_k .* G_tx_test_k;
+    S_tx_test_i = S_LFM_k .* G_tx_test_k_fixed;
     S_rx_test_i = S_tx_test_i .* H_case;
     s_cmp_test_i = ifft(S_rx_test_i, N_fft);
     s_cmp_test_i = s_cmp_test_i(1:N_pulse);
