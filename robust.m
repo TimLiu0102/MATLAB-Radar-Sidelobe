@@ -102,12 +102,23 @@ lambda_0 = alpha_reg;
 
 G_tx_k = (conj(S_LFM_k) .* E_H_conj .* R_k) ./ (abs(S_LFM_k).^2 .* E_absH2 + lambda_0);
 
+% 对比方案：严格使用test.m中的固定G_tx表达式（基于标称H_k一次性计算）
+% 注意：该G_tx在此处固定后，不随后续20次扰动场景变化
+epsilon_test = alpha_reg / mean(abs(H_k .* S_LFM_k));
+G_tx_test_k_fixed = R_k ./ (H_k .* S_LFM_k + epsilon_test);
+
 % 幅度限制：防止过高的增益导致PA饱和
 G_tx_mag = abs(G_tx_k);
 max_G = max(G_tx_mag);
 if max_G > A_max
     fprintf('应用幅度限制: 最大增益 %.2f > 限制值 %.2f\n', max_G, A_max);
     G_tx_k = G_tx_k ./ max(1, G_tx_mag/A_max);
+end
+
+% test.m方案也施加同样的幅度限制，保证可比性
+G_tx_test_mag = abs(G_tx_test_k_fixed);
+if max(G_tx_test_mag) > A_max
+    G_tx_test_k_fixed = G_tx_test_k_fixed ./ max(1, G_tx_test_mag/A_max);
 end
 
 % 显示补偿滤波器
@@ -430,6 +441,8 @@ fprintf('扰动场景数 K = %d\n', K_perturb);
 
 restoration_error_vec = zeros(K_perturb,1);
 time_error_vec = zeros(K_perturb,1);
+restoration_error_test_vec = zeros(K_perturb,1);
+time_error_test_vec = zeros(K_perturb,1);
 pslr_perturb_vec = zeros(K_perturb,1);
 islr_perturb_vec = zeros(K_perturb,1);
 papr_perturb_vec = zeros(K_perturb,1);
@@ -456,6 +469,15 @@ for k = 1:K_perturb
     err_case = evaluate_reference_error(s_cmp_i, S_LFM_k, N_pulse, N_fft, freq, B);
     restoration_error_vec(k) = err_case.spec_nmse;
     time_error_vec(k) = err_case.time_nmse;
+
+    % 对比方案：test.m中的G_tx应用到同一扰动信道
+    S_tx_test_i = S_LFM_k .* G_tx_test_k_fixed;
+    S_rx_test_i = S_tx_test_i .* H_case;
+    s_cmp_test_i = ifft(S_rx_test_i, N_fft);
+    s_cmp_test_i = s_cmp_test_i(1:N_pulse);
+    err_test_case = evaluate_reference_error(s_cmp_test_i, S_LFM_k, N_pulse, N_fft, freq, B);
+    restoration_error_test_vec(k) = err_test_case.spec_nmse;
+    time_error_test_vec(k) = err_test_case.time_nmse;
 
     % 归一化后用于PSLR/ISLR/PAPR/主瓣宽度评估
     s_rx_case = s_cmp_i / sqrt(sum(abs(s_cmp_i).^2) + eps);
@@ -490,6 +512,12 @@ end
 fprintf('\n=== 扰动信道下指标统计（K=%d）===\n', K_perturb);
 fprintf('恢复误差(固定鲁棒预补偿) spec_nmse: 均值=%.6f, 最大=%.6f\n', mean(restoration_error_vec), max(restoration_error_vec));
 fprintf('恢复误差(固定鲁棒预补偿) time_nmse: 均值=%.6f, 最大=%.6f\n', mean(time_error_vec), max(time_error_vec));
+fprintf('恢复误差(test.m的G_{tx}) spec_nmse: 均值=%.6f, 最大=%.6f\n', mean(restoration_error_test_vec), max(restoration_error_test_vec));
+fprintf('恢复误差(test.m的G_{tx}) time_nmse: 均值=%.6f, 最大=%.6f\n', mean(time_error_test_vec), max(time_error_test_vec));
+fprintf('平均恢复误差对比(spec_nmse): robust=%.6f, test=%.6f, 改善=%.6f\n', ...
+    mean(restoration_error_vec), mean(restoration_error_test_vec), mean(restoration_error_test_vec)-mean(restoration_error_vec));
+fprintf('平均恢复误差对比(time_nmse): robust=%.6f, test=%.6f, 改善=%.6f\n', ...
+    mean(time_error_vec), mean(time_error_test_vec), mean(time_error_test_vec)-mean(time_error_vec));
 fprintf('通过系统后信号平均误差 spec_nmse (20次): %.6f\n', mean(restoration_error_out_vec));
 fprintf('通过系统后信号平均误差 time_nmse (20次): %.6f\n', mean(time_error_out_vec));
 fprintf('PSLR(dB): 均值=%.4f, 最差=%.4f\n', mean(pslr_perturb_vec), max(pslr_perturb_vec));
