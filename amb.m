@@ -332,33 +332,45 @@ text(0.5, -0.26, '(c)', 'Units', 'normalized', 'FontWeight', 'bold', 'Horizontal
 
 
 
-%% 步骤5.1: 模糊函数对比（原始LFM信号 vs 最终信号）
+%% 步骤5.1: 三维模糊函数对比（原始LFM / 汉明窗链路 / 最终优化信号）
 % 最终信号采用优化窗链路并经过系统响应后的输出 s_tx_opt_with_H
+% 汉明窗信号采用汉明窗链路并经过系统响应后的输出 s_tx_hamming_with_H
 max_delay_samples = min(round(1.5 * fs / B), N_pulse - 1);   % 延迟范围（样本）
 fd_max = B / 2;                                               % 多普勒范围（Hz）
 num_fd = 121;                                                 % 多普勒采样点数
 fd_axis = linspace(-fd_max, fd_max, num_fd);
 
 [af_lfm_db, tau_lfm_s, fd_lfm_hz] = compute_ambiguity_surface(s_lfm, fs, max_delay_samples, fd_axis);
+[af_hamming_db, tau_hamming_s, fd_hamming_hz] = compute_ambiguity_surface(s_tx_hamming_with_H, fs, max_delay_samples, fd_axis);
 [af_final_db, tau_final_s, fd_final_hz] = compute_ambiguity_surface(s_tx_opt_with_H, fs, max_delay_samples, fd_axis);
 
 figure(5);
-set(gcf, 'Position', [180, 120, 1180, 480], 'Color', [1 1 1]);
-tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
+set(gcf, 'Position', [120, 110, 1450, 460], 'Color', [1 1 1]);
+tiledlayout(1,3,'Padding','compact','TileSpacing','compact');
 
 nexttile;
-imagesc(tau_lfm_s*1e6, fd_lfm_hz/1e3, af_lfm_db);
-axis xy; colormap(jet); c = colorbar; c.Label.String = 'Magnitude (dB)';
+surf(tau_lfm_s*1e6, fd_lfm_hz/1e3, af_lfm_db, 'EdgeColor', 'none');
+view(45, 35); axis tight; colormap(jet); c = colorbar; c.Label.String = 'Magnitude (dB)';
 caxis([-60 0]);
-xlabel('Delay (\mus)'); ylabel('Doppler (kHz)');
-title('原始LFM信号模糊函数');
+xlabel('Delay (\mus)'); ylabel('Doppler (kHz)'); zlabel('Magnitude (dB)');
+title('原始LFM信号模糊函数(3D)');
+grid on;
 
 nexttile;
-imagesc(tau_final_s*1e6, fd_final_hz/1e3, af_final_db);
-axis xy; colormap(jet); c = colorbar; c.Label.String = 'Magnitude (dB)';
+surf(tau_hamming_s*1e6, fd_hamming_hz/1e3, af_hamming_db, 'EdgeColor', 'none');
+view(45, 35); axis tight; colormap(jet); c = colorbar; c.Label.String = 'Magnitude (dB)';
 caxis([-60 0]);
-xlabel('Delay (\mus)'); ylabel('Doppler (kHz)');
-title('最终信号模糊函数');
+xlabel('Delay (\mus)'); ylabel('Doppler (kHz)'); zlabel('Magnitude (dB)');
+title('汉明窗链路信号模糊函数(3D)');
+grid on;
+
+nexttile;
+surf(tau_final_s*1e6, fd_final_hz/1e3, af_final_db, 'EdgeColor', 'none');
+view(45, 35); axis tight; colormap(jet); c = colorbar; c.Label.String = 'Magnitude (dB)';
+caxis([-60 0]);
+xlabel('Delay (\mus)'); ylabel('Doppler (kHz)'); zlabel('Magnitude (dB)');
+title('最终优化信号模糊函数(3D)');
+grid on;
 
 %% 步骤6: 命令行输出指标表
 fprintf('\n%-35s %-12s %-12s %-22s %-12s\n', 'Method', 'PSLR (dB)', 'ISLR (dB)', '3-dB Mainlobe Width (us)', 'PAPR (dB)');
