@@ -1,0 +1,974 @@
+clc;clear;close all;
+
+%% 发射端LFM预补偿算法
+clear; close all; clc;
+
+%% 步骤0: 仿真参数设置
+% 雷达参数
+B = 20e6;               % 带宽: 20 MHz
+T_pulse = 50e-6;        % 脉宽: 50 μs
+fs = 60e6;              % 采样率: 60 MHz
+
+% 处理参数
+N_pulse = round(T_pulse * fs);      % 脉冲内采样点数
+N_fft = 2^nextpow2(N_pulse * 8);    % FFT点数（8倍过采样）
+freq = (-N_fft/2:N_fft/2-1) * (fs/N_fft);  % 频率轴
+
+% 补偿参数
+alpha_reg = 1e-2;       % 正则化因子系数（增大了）
+A_max = 4.0;            % 最大增益限制（适当增大）
+
+% 显示参数
+f_center_idx = find(abs(freq)<=B/2);
+
+%% 步骤0.1: 生成增强的系统频率响应 H[k]
+% 增强幅度响应：更大的波动和不平坦度
+H_mag = zeros(N_fft, 1);
+H_mag(f_center_idx) = 0.7 + 0.4*cos(2*pi*freq(f_center_idx)/B*6) .* ...
+                      exp(-(freq(f_center_idx)/(0.5*B)).^2) + ...
+                      0.1*sin(2*pi*freq(f_center_idx)/B*3);
+
+% 增强相位响应：更大的非线性相位失真
+H_phase = zeros(N_fft, 1);
+H_phase(f_center_idx) = 0.4*pi*(freq(f_center_idx)/B).^3 + ...
+                        0.3*pi*sin(2*pi*freq(f_center_idx)/B*5) + ...
+                        0.05*pi*(freq(f_center_idx)/B).^2;
+
+% 组合成复数频率响应
+H_k = H_mag .* exp(1j*H_phase);
+H_k = fftshift(H_k);  % 转换为MATLAB的FFT顺序
+
+%% 步骤1: 生成理想LFM信号及其频谱
+% 生成时域LFM信号
+t = (-N_pulse/2:N_pulse/2-1)' / fs;
+k_chirp = B / T_pulse;  % 调频率
+s_lfm = exp(1j * pi * k_chirp * t.^2);  % 基带LFM
+
+% 过采样并补零到FFT长度
+s_lfm_padded = zeros(N_fft, 1);
+s_lfm_padded(1:N_pulse) = s_lfm;
+
+% 计算LFM频谱
+S_LFM_k = fft(s_lfm_padded, N_fft);
+
+% 设置目标参考频谱 R[k]（使用未加权的理想LFM频谱）
+R_k = S_LFM_k;
+
+%% 步骤2: 计算发射端预补偿谱（幅度+相位全补偿）
+% 计算正则化项：使用均值而不是最大值，更稳定
+epsilon = alpha_reg * mean(abs(H_k .* S_LFM_k));
+
+% 核心补偿公式：G_tx[k] = R[k] / (H[k] * S_LFM[k] + ε)
+G_tx_k = R_k ./ (H_k .* S_LFM_k + epsilon);
+
+% 幅度限制：防止过高的增益导致PA饱和
+G_tx_mag = abs(G_tx_k);
+max_G = max(G_tx_mag);
+if max_G > A_max
+    G_tx_k = G_tx_k ./ max(1, G_tx_mag/A_max);
+end
+
+%% 步骤3: 频域窗函数设计（Baseline + NEW）
+f_idx = find(abs(freq)<=B);
+L = length(f_idx);
+min_width_B_multiple = 0.8;  % NEW: 优化窗宽下限（以B为单位）
+max_width_B_multiple = 2.0;  % NEW: 优化窗宽上限（受当前频带截断）
+alpha_lit = 7.0;            % 文献窗参数（Yamaoka-Oshima PM默认参数）
+literature_method_id = 1;   % 文献窗方法选择：1=PM1(默认), 2=PM2, 3=PM3
+f_local = freq(f_idx);
+
+% Baseline: 原有海明窗
+hamming_window = zeros(N_fft, 1);
+hamming_win_local = hamming(L);
+hamming_window(f_idx) = hamming_win_local;
+W_hamming_k = fftshift(hamming_window);
+
+
+% Yamaoka-Oshima文献窗链路（IEEE Access 2025）
+% 默认采用Proposed Method 1（PM1）：w(t)=g(t).*cos(pi*t)
+% 其中 g(t)=exp(-alpha_lit*t^2), t∈[-0.5,0.5]
+literature_win_local = build_yamaoka_oshima_window(L, alpha_lit, literature_method_id);
+literature_window = zeros(N_fft, 1);
+literature_window(f_idx) = literature_win_local;
+W_literature_k = fftshift(literature_window);
+
+% 先计算无补偿和理想信号（用于基准指标）
+s_ideal = s_lfm / sqrt(sum(abs(s_lfm).^2));
+S_with_H = S_LFM_k .* H_k;
+s_with_H_time = ifft(S_with_H, N_fft);
+s_with_H = s_with_H_time(1:N_pulse);
+s_with_H = s_with_H / sqrt(sum(abs(s_with_H).^2));
+
+% Baseline链路: 预补偿 + Hamming窗
+S_tx_hamming_k = S_LFM_k .* (G_tx_k .* W_hamming_k);
+s_tx_hamming_time = ifft(S_tx_hamming_k, N_fft);
+s_tx_hamming_pulse = s_tx_hamming_time(1:N_pulse);
+s_tx_hamming_pulse = s_tx_hamming_pulse / sqrt(sum(abs(s_tx_hamming_pulse).^2));
+S_tx_hamming_full = fft(s_tx_hamming_time, N_fft);
+S_tx_hamming_with_H = S_tx_hamming_full .* H_k;
+s_tx_hamming_with_H_time = ifft(S_tx_hamming_with_H, N_fft);
+s_tx_hamming_with_H = s_tx_hamming_with_H_time(1:N_pulse);
+s_tx_hamming_with_H = s_tx_hamming_with_H / sqrt(sum(abs(s_tx_hamming_with_H).^2));
+
+
+% Yamaoka-Oshima PM1窗链路: 预补偿 + 文献窗
+S_tx_literature_k = S_LFM_k .* (G_tx_k .* W_literature_k);
+s_tx_literature_time = ifft(S_tx_literature_k, N_fft);
+s_tx_literature_pulse = s_tx_literature_time(1:N_pulse);
+s_tx_literature_pulse = s_tx_literature_pulse / sqrt(sum(abs(s_tx_literature_pulse).^2));
+S_tx_literature_full = fft(s_tx_literature_time, N_fft);
+S_tx_literature_with_H = S_tx_literature_full .* H_k;
+s_tx_literature_with_H_time = ifft(S_tx_literature_with_H, N_fft);
+s_tx_literature_with_H = s_tx_literature_with_H_time(1:N_pulse);
+s_tx_literature_with_H = s_tx_literature_with_H / sqrt(sum(abs(s_tx_literature_with_H).^2));
+
+% Baseline指标
+auto_corr_hamming = xcorr(s_tx_hamming_with_H, s_tx_hamming_with_H);
+auto_corr_hamming = auto_corr_hamming / max(abs(auto_corr_hamming));
+peak_idx_hamming = ceil(length(auto_corr_hamming)/2);
+PSLR_hamming = compute_pslr_corrected(auto_corr_hamming, peak_idx_hamming, fs, B);
+ISLR_hamming = compute_islr_corrected(auto_corr_hamming, peak_idx_hamming, fs, B);
+mainlobe_width_hamming = compute_3db_width_corrected(auto_corr_hamming, peak_idx_hamming, fs, B);
+PAPR_hamming = compute_papr(s_tx_hamming_with_H);
+
+
+% Yamaoka-Oshima PM1窗链路指标
+auto_corr_literature = xcorr(s_tx_literature_with_H, s_tx_literature_with_H);
+auto_corr_literature = auto_corr_literature / max(abs(auto_corr_literature));
+peak_idx_literature = ceil(length(auto_corr_literature)/2);
+PSLR_literature = compute_pslr_corrected(auto_corr_literature, peak_idx_literature, fs, B);
+ISLR_literature = compute_islr_corrected(auto_corr_literature, peak_idx_literature, fs, B);
+mainlobe_width_literature = compute_3db_width_corrected(auto_corr_literature, peak_idx_literature, fs, B);
+PAPR_literature = compute_papr(s_tx_literature_with_H);
+
+% LFM参考指标（作为优化约束参考）
+auto_corr_ideal = xcorr(s_ideal, s_ideal);
+auto_corr_ideal = auto_corr_ideal / max(abs(auto_corr_ideal));
+peak_idx_ideal = ceil(length(auto_corr_ideal)/2);
+mainlobe_width_lfm_ref = compute_3db_width_corrected(auto_corr_ideal, peak_idx_ideal, fs, B);
+PAPR_lfm_ref = compute_papr(s_ideal);
+
+%% NEW: 优化广义余弦窗设计
+%% NEW: 萤火虫算法优化
+rng(20);
+lambda1 = 0.21;
+lambda2 = 0.54;
+w_pslr = 0.13;
+w_islr = 0.12;
+fa_opt.pop_size = 30;
+fa_opt.max_iter = 50;
+fa_opt.beta0 = 1;
+fa_opt.gamma = 2;
+fa_opt.alpha = 0.2;
+fa_opt.verbose = true;
+
+best_param = optimize_generalized_cosine_fa(...
+    G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, ...
+    mainlobe_width_lfm_ref, PAPR_lfm_ref, ...
+    lambda1, lambda2, w_pslr, w_islr, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B);
+
+best_coeff = best_param(1:3);
+best_width_B_multiple = best_param(4);
+opt_gc_local = build_generalized_cosine_window(L, f_local, best_coeff, best_width_B_multiple, B);
+opt_gc_window = zeros(N_fft, 1);
+opt_gc_window(f_idx) = opt_gc_local;
+W_opt_k = fftshift(opt_gc_window);
+
+% 优化窗链路
+S_tx_opt_k = S_LFM_k .* (G_tx_k .* W_opt_k);
+s_tx_opt_time = ifft(S_tx_opt_k, N_fft);
+s_tx_opt_pulse = s_tx_opt_time(1:N_pulse);
+s_tx_opt_pulse = s_tx_opt_pulse / sqrt(sum(abs(s_tx_opt_pulse).^2));
+S_tx_opt_full = fft(s_tx_opt_time, N_fft);
+S_tx_opt_with_H = S_tx_opt_full .* H_k;
+s_tx_opt_with_H_time = ifft(S_tx_opt_with_H, N_fft);
+s_tx_opt_with_H = s_tx_opt_with_H_time(1:N_pulse);
+s_tx_opt_with_H = s_tx_opt_with_H / sqrt(sum(abs(s_tx_opt_with_H).^2));
+
+%% 步骤4: 自相关与指标计算
+% 理想、失真、Hamming、优化窗
+auto_corr_ideal = xcorr(s_ideal, s_ideal);
+auto_corr_no_comp = xcorr(s_with_H, s_with_H);
+auto_corr_opt = xcorr(s_tx_opt_with_H, s_tx_opt_with_H);
+
+auto_corr_ideal = auto_corr_ideal / max(abs(auto_corr_ideal));
+auto_corr_no_comp = auto_corr_no_comp / max(abs(auto_corr_no_comp));
+auto_corr_opt = auto_corr_opt / max(abs(auto_corr_opt));
+
+auto_corr_ideal_db = 20*log10(abs(auto_corr_ideal) + 1e-10);
+auto_corr_no_comp_db = 20*log10(abs(auto_corr_no_comp) + 1e-10);
+auto_corr_hamming_db = 20*log10(abs(auto_corr_hamming) + 1e-10);
+auto_corr_literature_db = 20*log10(abs(auto_corr_literature) + 1e-10);
+auto_corr_opt_db = 20*log10(abs(auto_corr_opt) + 1e-10);
+
+t_corr = (-N_pulse+1:N_pulse-1) / fs * 1e6;
+
+peak_idx_ideal = ceil(length(auto_corr_ideal)/2);
+peak_idx_no_comp = ceil(length(auto_corr_no_comp)/2);
+peak_idx_opt = ceil(length(auto_corr_opt)/2);
+
+PSLR_ideal = compute_pslr_corrected(auto_corr_ideal, peak_idx_ideal, fs, B);
+PSLR_no_comp = compute_pslr_corrected(auto_corr_no_comp, peak_idx_no_comp, fs, B);
+PSLR_opt = compute_pslr_corrected(auto_corr_opt, peak_idx_opt, fs, B);
+
+ISLR_ideal = compute_islr_corrected(auto_corr_ideal, peak_idx_ideal, fs, B);
+ISLR_no_comp = compute_islr_corrected(auto_corr_no_comp, peak_idx_no_comp, fs, B);
+ISLR_opt = compute_islr_corrected(auto_corr_opt, peak_idx_opt, fs, B);
+
+mainlobe_width_ideal = compute_3db_width_corrected(auto_corr_ideal, peak_idx_ideal, fs, B);
+mainlobe_width_no_comp = compute_3db_width_corrected(auto_corr_no_comp, peak_idx_no_comp, fs, B);
+mainlobe_width_opt = compute_3db_width_corrected(auto_corr_opt, peak_idx_opt, fs, B);
+
+PAPR_ideal = compute_papr(s_ideal);
+PAPR_no_comp = compute_papr(s_with_H);
+PAPR_opt = compute_papr(s_tx_opt_with_H);
+
+%% 步骤5: 关键图输出（仅保留关键对比图）
+% 频谱准备
+s_ideal_padded = zeros(N_fft, 1); s_ideal_padded(1:N_pulse) = s_ideal;
+s_with_H_padded = zeros(N_fft, 1); s_with_H_padded(1:N_pulse) = s_with_H;
+s_hamming_padded = zeros(N_fft, 1); s_hamming_padded(1:N_pulse) = s_tx_hamming_with_H;
+s_literature_padded = zeros(N_fft, 1); s_literature_padded(1:N_pulse) = s_tx_literature_with_H;
+s_opt_padded = zeros(N_fft, 1); s_opt_padded(1:N_pulse) = s_tx_opt_with_H;
+
+S_ideal_mag = fftshift(abs(fft(s_ideal_padded, N_fft)));
+S_no_comp_mag = fftshift(abs(fft(s_with_H_padded, N_fft)));
+S_hamming_mag = fftshift(abs(fft(s_hamming_padded, N_fft)));
+S_literature_mag = fftshift(abs(fft(s_literature_padded, N_fft)));
+S_opt_mag = fftshift(abs(fft(s_opt_padded, N_fft)));
+
+% 图1：窗形对比
+figure(1);
+plot(0:L-1, hamming_win_local, 'b-', 'LineWidth', 1.5); hold on;
+plot(0:L-1, literature_win_local, 'k-.', 'LineWidth', 1.5);
+plot(0:L-1, opt_gc_local, 'r--', 'LineWidth', 1.5);
+xlabel('Window Sample Index'); ylabel('Amplitude');
+legend('Hamming', 'Yamaoka-Oshima PM1 window', 'Optimized generalized cosine', 'Location', 'best');
+grid on;
+
+% 图2：自相关对比图
+figure(2);
+plot(t_corr, auto_corr_ideal_db, 'k-', 'LineWidth', 1.5); hold on;
+plot(t_corr, auto_corr_no_comp_db, 'r--', 'LineWidth', 1.5);
+plot(t_corr, auto_corr_hamming_db, 'b-.', 'LineWidth', 1.5);
+plot(t_corr, auto_corr_literature_db, 'g:', 'LineWidth', 1.7);
+plot(t_corr, auto_corr_opt_db, 'm-', 'LineWidth', 1.5);
+xlabel('Time Delay (\mus)'); ylabel('Autocorrelation (dB)');
+legend('Ideal LFM', 'Distorted output', 'Hamming window', 'Yamaoka-Oshima PM1 window', 'Optimized generalized cosine window', 'Location', 'best');
+ylim([-120, 0]); grid on;
+
+% 图3：频谱幅度对比图
+figure(3);
+plot(freq/1e6, 20*log10(S_ideal_mag/max(S_ideal_mag) + 1e-12), 'k-', 'LineWidth', 1.5); hold on;
+plot(freq/1e6, 20*log10(S_no_comp_mag/max(S_no_comp_mag) + 1e-12), 'r--', 'LineWidth', 1.5);
+plot(freq/1e6, 20*log10(S_hamming_mag/max(S_hamming_mag) + 1e-12), 'b-.', 'LineWidth', 1.5);
+plot(freq/1e6, 20*log10(S_literature_mag/max(S_literature_mag) + 1e-12), 'g:', 'LineWidth', 1.7);
+plot(freq/1e6, 20*log10(S_opt_mag/max(S_opt_mag) + 1e-12), 'm-', 'LineWidth', 1.5);
+xlabel('Frequency (MHz)'); ylabel('Magnitude (dB)');
+legend('Ideal LFM', 'Distorted output', 'Hamming window', 'Yamaoka-Oshima PM1 window', 'Optimized generalized cosine window', 'Location', 'best');
+xlim([-B/1e6*1.5, B/1e6*1.5]); ylim([-100, 5]); grid on;
+
+% 图4：论文风格四联图（适配当前脚本变量）
+figure(4);
+set(gcf, 'Position', [120, 120, 1200, 360]);
+tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
+
+Nfft_plot = 8192;
+Nw = L;
+
+% 构造对比窗（与opt窗同长度）
+W_hamming = hamming_win_local(:);
+W_kaiser = kaiser(Nw, 6).';
+if exist('taylorwin', 'file')
+    W_taylor = taylorwin(Nw, 4, -35).';
+else
+    % 兼容环境：若无taylorwin，退化为Kaiser近似
+    W_taylor = kaiser(Nw, 5).';
+end
+W_cheb = chebwin(Nw, 80).';
+W_literature = literature_win_local(:).';
+W_opt = opt_gc_local(:).';
+
+win_list = {W_hamming, W_kaiser, W_taylor, W_cheb, W_literature, W_opt};
+labels = {'Hamming','Kaiser','Taylor','Chebyshev','Yamaoka-Oshima PM1 window','Proposed'};
+styles = {'r--','b-.','m:','c--','k-.','g-'};
+widths = [1.0, 1.0, 1.2, 1.0, 1.2, 1.5];
+
+% (b) 时域窗形
+nexttile;
+n = (0:Nw-1)';
+for ii = 1:numel(win_list)
+    wi = abs(win_list{ii}(:));
+    plot(n, wi/(max(wi)+eps), styles{ii}, 'LineWidth', widths(ii)); hold on;
+end
+xlabel('Samples'); ylabel('Normalized Amplitude');
+legend(labels, 'Location','best');
+grid on; xlim([0 Nw-1]);
+text(0.5, -0.26, '(b)', 'Units', 'normalized', 'FontWeight', 'bold', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
+
+% (c) 低通 FIR 响应（窗法）
+nexttile;
+M_fir = max(32, 2*floor(Nw/4));
+wc = 0.25;  % 归一化截止频率（相对Nyquist）
+if mod(M_fir,2) ~= 0
+    M_fir = M_fir + 1;
+end
+h_ideal = fir1(M_fir, wc, 'low', rectwin(M_fir+1));
+H_fir = cell(numel(win_list),1);
+w_fir = cell(numel(win_list),1);
+for ii = 1:numel(win_list)
+    wi_src = abs(win_list{ii}(:));
+    wi = interp1(1:numel(wi_src), wi_src, linspace(1, numel(wi_src), M_fir+1), 'linear', 'extrap');
+    wi = wi(:)/(max(wi)+eps);
+    bi = h_ideal(:) .* wi(:);
+    [H_fir{ii}, w_fir{ii}] = freqz(bi, 1, Nfft_plot);
+    plot(w_fir{ii}/pi, 20*log10(abs(H_fir{ii})+eps), styles{ii}, 'LineWidth', widths(ii)); hold on;
+end
+xlabel('Normalized Frequency (\times\pi rad/sample)');
+ylabel('Magnitude response (dB)');
+legend(labels, 'Location','best');
+grid on; xlim([0 1]); ylim([-150 5]);
+text(0.5, -0.26, '(c)', 'Units', 'normalized', 'FontWeight', 'bold', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
+
+
+
+%% 步骤5.1: 模糊函数对比（原始LFM信号 vs 最终信号）
+% 最终信号采用优化窗链路并经过系统响应后的输出 s_tx_opt_with_H
+max_delay_samples = min(round(1.5 * fs / B), N_pulse - 1);   % 延迟范围（样本）
+fd_max = B / 2;                                               % 多普勒范围（Hz）
+num_fd = 121;                                                 % 多普勒采样点数
+fd_axis = linspace(-fd_max, fd_max, num_fd);
+
+[af_lfm_db, tau_lfm_s, fd_lfm_hz] = compute_ambiguity_surface(s_lfm, fs, max_delay_samples, fd_axis);
+[af_final_db, tau_final_s, fd_final_hz] = compute_ambiguity_surface(s_tx_opt_with_H, fs, max_delay_samples, fd_axis);
+
+figure(5);
+set(gcf, 'Position', [180, 120, 1180, 480], 'Color', [1 1 1]);
+tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
+
+nexttile;
+imagesc(tau_lfm_s*1e6, fd_lfm_hz/1e3, af_lfm_db);
+axis xy; colormap(jet); c = colorbar; c.Label.String = 'Magnitude (dB)';
+caxis([-60 0]);
+xlabel('Delay (\mus)'); ylabel('Doppler (kHz)');
+title('原始LFM信号模糊函数');
+
+nexttile;
+imagesc(tau_final_s*1e6, fd_final_hz/1e3, af_final_db);
+axis xy; colormap(jet); c = colorbar; c.Label.String = 'Magnitude (dB)';
+caxis([-60 0]);
+xlabel('Delay (\mus)'); ylabel('Doppler (kHz)');
+title('最终信号模糊函数');
+
+%% 步骤6: 命令行输出指标表
+fprintf('\n%-35s %-12s %-12s %-22s %-12s\n', 'Method', 'PSLR (dB)', 'ISLR (dB)', '3-dB Mainlobe Width (us)', 'PAPR (dB)');
+fprintf('%s\n', repmat('-', 1, 102));
+fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Ideal LFM', PSLR_ideal, ISLR_ideal, mainlobe_width_ideal, PAPR_ideal);
+fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Distorted output', PSLR_no_comp, ISLR_no_comp, mainlobe_width_no_comp, PAPR_no_comp);
+fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Hamming window', PSLR_hamming, ISLR_hamming, mainlobe_width_hamming, PAPR_hamming);
+fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Yamaoka-Oshima PM1 window', PSLR_literature, ISLR_literature, mainlobe_width_literature, PAPR_literature);
+fprintf('%-35s %-12.3f %-12.3f %-22.4f %-12.3f\n', 'Optimized generalized cosine window', PSLR_opt, ISLR_opt, mainlobe_width_opt, PAPR_opt);
+fprintf('Optimized [a0, a1, a2] = [%.4f, %.4f, %.4f], window width = %.4f * B\n', best_coeff(1), best_coeff(2), best_coeff(3), best_width_B_multiple);
+
+%% 步骤6.1: 指定权重组合下的指标输出
+% 权重顺序：[PSLR权重, ISLR权重, 主瓣宽度权重, PAPR权重]
+weight_sets = [
+    0.10, 0.10, 0.40, 0.40;
+    0.40, 0.40, 0.10, 0.10;
+    0.25, 0.25, 0.25, 0.25
+];
+
+fa_opt_sens = fa_opt;
+fa_opt_sens.pop_size = 18;
+fa_opt_sens.max_iter = 25;
+fa_opt_sens.verbose = false;
+
+num_weight_sets = size(weight_sets, 1);
+weight_results = zeros(num_weight_sets, 8); % [wP,wI,wM,wPAPR,PSLR,ISLR,MLW,PAPR]
+
+for i = 1:num_weight_sets
+    cur_w_pslr = weight_sets(i, 1);
+    cur_w_islr = weight_sets(i, 2);
+    cur_lambda1 = weight_sets(i, 3);  % 主瓣宽度权重
+    cur_lambda2 = weight_sets(i, 4);  % PAPR权重
+
+    best_param_case = optimize_generalized_cosine_fa(...
+        G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, ...
+        mainlobe_width_lfm_ref, PAPR_lfm_ref, ...
+        cur_lambda1, cur_lambda2, cur_w_pslr, cur_w_islr, ...
+        min_width_B_multiple, max_width_B_multiple, fa_opt_sens, fs, B);
+
+    [~, cur_metrics] = evaluate_window_objective(best_param_case, ...
+        G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, ...
+        mainlobe_width_lfm_ref, PAPR_lfm_ref, ...
+        cur_lambda1, cur_lambda2, cur_w_pslr, cur_w_islr, fs, B);
+
+    weight_results(i, :) = [cur_w_pslr, cur_w_islr, cur_lambda1, cur_lambda2, ...
+        cur_metrics.pslr_db, cur_metrics.islr_db, cur_metrics.mainlobe_width, cur_metrics.papr_db];
+end
+
+fprintf('\n===== Step 6.1: Metrics under specified weight sets =====\n');
+fprintf('%-12s %-12s %-14s %-12s %-12s %-12s %-18s %-12s\n', ...
+    'PSLR_w', 'ISLR_w', 'Mainlobe_w', 'PAPR_w', 'PSLR(dB)', 'ISLR(dB)', 'Mainlobe(us)', 'PAPR(dB)');
+fprintf('%s\n', repmat('-', 1, 108));
+for i = 1:num_weight_sets
+    fprintf('%-12.2f %-12.2f %-14.2f %-12.2f %-12.3f %-12.3f %-18.4f %-12.3f\n', ...
+        weight_results(i,1), weight_results(i,2), weight_results(i,3), weight_results(i,4), ...
+        weight_results(i,5), weight_results(i,6), weight_results(i,7), weight_results(i,8));
+end
+
+
+%% 步骤6.2: 不同B、T_pulse（fs=60e6）鲁棒性分析（1x2子图）
+fs_robust = 60e6;
+B_sweep_MHz = [10, 15, 20, 25, 30, 35, 40];
+Tp_sweep_us = [10, 15, 20, 25, 30, 35, 40];
+
+% 图A: 扫描B，固定T_pulse
+T_fix = T_pulse;
+num_B = numel(B_sweep_MHz);
+robust_B = zeros(num_B, 5); % [B_MHz, PSLR_opt, ISLR_opt, MLW_opt, PAPR_opt]
+for i = 1:num_B
+    B_case = B_sweep_MHz(i) * 1e6;
+    case_metrics = run_single_case_metrics(B_case, T_fix, fs_robust, alpha_reg, A_max, ...
+        lambda1, lambda2, w_pslr, w_islr, min_width_B_multiple, max_width_B_multiple, fa_opt_sens);
+    robust_B(i, :) = [B_sweep_MHz(i), case_metrics.pslr_opt, case_metrics.islr_opt, case_metrics.mlw_opt, case_metrics.papr_opt];
+end
+
+% 图B: 扫描T_pulse，固定B
+B_fix = B;
+num_T = numel(Tp_sweep_us);
+robust_T = zeros(num_T, 5); % [Tp_us, PSLR_opt, ISLR_opt, MLW_opt, PAPR_opt]
+for i = 1:num_T
+    T_case = Tp_sweep_us(i) * 1e-6;
+    case_metrics = run_single_case_metrics(B_fix, T_case, fs_robust, alpha_reg, A_max, ...
+        lambda1, lambda2, w_pslr, w_islr, min_width_B_multiple, max_width_B_multiple, fa_opt_sens);
+    robust_T(i, :) = [Tp_sweep_us(i), case_metrics.pslr_opt, case_metrics.islr_opt, case_metrics.mlw_opt, case_metrics.papr_opt];
+end
+
+fprintf('\n===== Robustness analysis A: sweep B (MHz), T_{pulse}=%.1f us, fs=60e6 =====\n', T_fix*1e6);
+fprintf('%-10s %-12s %-12s %-14s %-12s\n', 'B(MHz)', 'PSLR_opt', 'ISLR_opt', 'MLW_opt(us)', 'PAPR_opt');
+fprintf('%s\n', repmat('-', 1, 68));
+for i = 1:size(robust_B,1)
+    fprintf('%-10.1f %-12.3f %-12.3f %-14.4f %-12.3f\n', robust_B(i,1), robust_B(i,2), robust_B(i,3), robust_B(i,4), robust_B(i,5));
+end
+
+fprintf('\n===== Robustness analysis B: sweep T_{pulse} (us), B=%.1f MHz, fs=60e6 =====\n', B_fix/1e6);
+fprintf('%-10s %-12s %-12s %-14s %-12s\n', 'Tp(us)', 'PSLR_opt', 'ISLR_opt', 'MLW_opt(us)', 'PAPR_opt');
+fprintf('%s\n', repmat('-', 1, 68));
+for i = 1:size(robust_T,1)
+    fprintf('%-10.1f %-12.3f %-12.3f %-14.4f %-12.3f\n', robust_T(i,1), robust_T(i,2), robust_T(i,3), robust_T(i,4), robust_T(i,5));
+end
+
+figure(6);
+set(gcf, 'Position', [150, 120, 1280, 460], 'Color', [1 1 1]);
+tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
+
+% 图A：不同B下性能变化
+nexttile;
+yyaxis left;
+p1 = plot(robust_B(:,1), robust_B(:,2), 'o-b', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p2 = plot(robust_B(:,1), robust_B(:,3), 's-r', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('PSLR / ISLR (dB)');
+
+yyaxis right;
+p3 = plot(robust_B(:,1), robust_B(:,4), '^-m', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p4 = plot(robust_B(:,1), robust_B(:,5), 'd-k', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('Mainlobe width (us) / PAPR (dB)');
+
+xlabel('B (MHz)');
+title('A: Performance vs B');
+grid on;
+set(gca, 'XTick', B_sweep_MHz);
+legend([p1 p2 p3 p4], {'PSLR','ISLR','Mainlobe width','PAPR'}, 'Location', 'best');
+
+% 图B：不同T_pulse下性能变化
+nexttile;
+yyaxis left;
+p1 = plot(robust_T(:,1), robust_T(:,2), 'o-b', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p2 = plot(robust_T(:,1), robust_T(:,3), 's-r', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('PSLR / ISLR (dB)');
+
+yyaxis right;
+p3 = plot(robust_T(:,1), robust_T(:,4), '^-m', 'LineWidth', 1.5, 'MarkerSize', 6); hold on;
+p4 = plot(robust_T(:,1), robust_T(:,5), 'd-k', 'LineWidth', 1.5, 'MarkerSize', 6);
+ylabel('Mainlobe width (us) / PAPR (dB)');
+
+xlabel('T_{pulse} (us)');
+title('B: Performance vs T_{pulse}');
+grid on;
+set(gca, 'XTick', Tp_sweep_us);
+legend([p1 p2 p3 p4], {'PSLR','ISLR','Mainlobe width','PAPR'}, 'Location', 'best');
+
+%% 步骤7: 随机种子1~50重复优化统计（不影响原有单次绘图）
+%num_trials = 50;
+%seed_list = 1:num_trials;
+%best_params_runs = zeros(num_trials, 4);
+%PSLR_runs = zeros(num_trials, 1);
+%ISLR_runs = zeros(num_trials, 1);
+%mainlobe_runs = zeros(num_trials, 1);
+%PAPR_runs = zeros(num_trials, 1);
+
+% fa_opt_mc = fa_opt;
+% fa_opt_mc.verbose = false;  % Monte Carlo阶段关闭迭代日志，避免刷屏
+
+% for trial_idx = 1:num_trials
+%     rng(seed_list(trial_idx));
+%     best_param_trial = optimize_generalized_cosine_fa(...
+%         G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, ...
+%         mainlobe_width_hamming, PAPR_hamming, ...
+%         lambda1, lambda2, min_width_B_multiple, max_width_B_multiple, fa_opt_mc, fs, B);
+% 
+%     best_params_runs(trial_idx, :) = best_param_trial;
+% 
+%     coeff_trial = best_param_trial(1:3);
+%     width_trial = best_param_trial(4);
+%     win_trial_local = build_generalized_cosine_window(L, f_local, coeff_trial, width_trial, B);
+%     win_trial = zeros(N_fft, 1);
+%     win_trial(f_idx) = win_trial_local;
+%     W_trial_k = fftshift(win_trial);
+% 
+%     S_tx_trial_k = S_LFM_k .* (G_tx_k .* W_trial_k);
+%     s_tx_trial_time = ifft(S_tx_trial_k, N_fft);
+%     S_tx_trial_full = fft(s_tx_trial_time, N_fft);
+%     S_tx_trial_with_H = S_tx_trial_full .* H_k;
+%     s_tx_trial_with_H_time = ifft(S_tx_trial_with_H, N_fft);
+%     s_tx_trial_with_H = s_tx_trial_with_H_time(1:N_pulse);
+%     s_tx_trial_with_H = s_tx_trial_with_H / sqrt(sum(abs(s_tx_trial_with_H).^2));
+% 
+%     auto_corr_trial = xcorr(s_tx_trial_with_H, s_tx_trial_with_H);
+%     auto_corr_trial = auto_corr_trial / max(abs(auto_corr_trial));
+%     peak_idx_trial = ceil(length(auto_corr_trial)/2);
+% 
+%     PSLR_runs(trial_idx) = compute_pslr_corrected(auto_corr_trial, peak_idx_trial, fs, B);
+%     ISLR_runs(trial_idx) = compute_islr_corrected(auto_corr_trial, peak_idx_trial, fs, B);
+%     mainlobe_runs(trial_idx) = compute_3db_width_corrected(auto_corr_trial, peak_idx_trial, fs, B);
+%     PAPR_runs(trial_idx) = compute_papr(s_tx_trial_with_H);
+% end
+% 
+% % 统计量
+% stats_names = {'PSLR (dB)', 'ISLR (dB)', '3-dB Mainlobe Width (us)', 'PAPR (dB)'};
+% stats_mat = [PSLR_runs, ISLR_runs, mainlobe_runs, PAPR_runs];
+% mean_vals = mean(stats_mat, 1);
+% std_vals = std(stats_mat, 0, 1);
+% best_vals = min(stats_mat, [], 1);
+% worst_vals = max(stats_mat, [], 1);
+% 
+% fprintf('\n%-28s %-12s %-12s %-12s %-12s\n', 'Metric (50 random seeds)', 'Mean', 'Std', 'Best', 'Worst');
+% fprintf('%s\n', repmat('-', 1, 82));
+% for k = 1:numel(stats_names)
+%     fprintf('%-28s %-12.4f %-12.4f %-12.4f %-12.4f\n', ...
+%         stats_names{k}, mean_vals(k), std_vals(k), best_vals(k), worst_vals(k));
+% end
+% 
+% % 可视化：箱线图（直观看50次分布）
+% figure(5);
+% set(gcf, 'Position', [180, 120, 1000, 520]);
+% tiledlayout(2,2,'Padding','compact','TileSpacing','compact');
+% 
+% nexttile; boxplot(PSLR_runs); title('PSLR (dB)'); grid on;
+% nexttile; boxplot(ISLR_runs); title('ISLR (dB)'); grid on;
+% nexttile; boxplot(mainlobe_runs); title('3-dB Mainlobe Width (us)'); grid on;
+% nexttile; boxplot(PAPR_runs); title('PAPR (dB)'); grid on;
+
+%% ===== local functions =====
+
+function w = build_yamaoka_oshima_window(L, alpha_lit, method_id)
+% Yamaoka & Oshima (IEEE Access, 2025) 文献窗构造
+% 输入:
+%   L         - 窗长度
+%   alpha_lit - Gaussian基窗参数
+%   method_id - 方法编号: 1=PM1, 2=PM2, 3=PM3
+% 输出:
+%   w         - Lx1列向量，已做实数化/有限值处理/归一化
+
+if nargin < 2 || isempty(alpha_lit)
+    alpha_lit = 7.0;
+end
+if nargin < 3 || isempty(method_id)
+    method_id = 1;
+end
+
+if L <= 0
+    w = zeros(0,1);
+    return;
+end
+
+if L == 1
+    t = 0;
+else
+    t = linspace(-0.5, 0.5, L).';
+end
+
+g = exp(-alpha_lit * t.^2);
+
+if method_id == 1
+    % Proposed Method 1（默认）
+    w = g .* cos(pi*t);
+elseif method_id == 2
+    % Proposed Method 2
+    w = g .* (0.5 + 0.5*cos(2*pi*t));
+elseif method_id == 3
+    % Proposed Method 3
+    w = g .* (0.75*cos(pi*t) + 0.25*cos(3*pi*t));
+else
+    % 非法method_id时回退到PM1，保证可运行
+    w = g .* cos(pi*t);
+end
+
+w = real(w(:));
+w(~isfinite(w)) = 0;
+if max(abs(w)) > 0
+    w = w / max(abs(w));
+end
+
+end
+
+function best_param = optimize_generalized_cosine_fa(G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ref, papr_ref, lambda1, lambda2, w_pslr, w_islr, min_width_B_multiple, max_width_B_multiple, fa_opt, fs, B)
+pop_size = fa_opt.pop_size;
+max_iter = fa_opt.max_iter;
+beta0 = fa_opt.beta0;
+gamma = fa_opt.gamma;
+alpha = fa_opt.alpha;
+if isfield(fa_opt, 'verbose')
+    verbose = fa_opt.verbose;
+else
+    verbose = true;
+end
+
+pop = rand(pop_size, 4);
+pop(:,4) = min_width_B_multiple + (max_width_B_multiple-min_width_B_multiple)*pop(:,4);
+for i = 1:pop_size
+    pop(i, :) = project_coeffs(pop(i, :), min_width_B_multiple, max_width_B_multiple);
+end
+
+J = zeros(pop_size, 1);
+for i = 1:pop_size
+    J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ref, papr_ref, lambda1, lambda2, w_pslr, w_islr, fs, B);
+end
+
+for iter = 1:max_iter
+    for i = 1:pop_size
+        for j = 1:pop_size
+            if J(j) < J(i)
+                r2 = sum((pop(i, :) - pop(j, :)).^2);
+                beta = beta0 * exp(-gamma * r2);
+                step = beta * (pop(j, :) - pop(i, :)) + alpha * ([rand(1, 3)-0.5, rand-0.5]);
+                pop(i, :) = project_coeffs(pop(i, :) + step, min_width_B_multiple, max_width_B_multiple);
+                J(i) = evaluate_window_objective(pop(i, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ref, papr_ref, lambda1, lambda2, w_pslr, w_islr, fs, B);
+            end
+        end
+    end
+
+    [best_J, best_idx_iter] = min(J);
+    if verbose
+        [~, metrics] = evaluate_window_objective(pop(best_idx_iter, :), G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ref, papr_ref, lambda1, lambda2, w_pslr, w_islr, fs, B);
+        fprintf('FA iter %02d/%02d | J=%.4f | PSLR=%.3f dB | ISLR=%.3f dB | Mainlobe=%.4f us | PAPR=%.3f dB | Width=%.3f*B\n', ...
+            iter, max_iter, best_J, metrics.pslr_db, metrics.islr_db, metrics.mainlobe_width, metrics.papr_db, pop(best_idx_iter, 4));
+    end
+end
+
+[~, best_idx] = min(J);
+best_param = pop(best_idx, :);
+end
+
+function [J, metrics] = evaluate_window_objective(param, G_tx_k, S_LFM_k, H_k, N_fft, N_pulse, f_idx, f_local, mlw_ref, papr_ref, lambda1, lambda2, w_pslr, w_islr, fs, B)
+L = length(f_idx);
+coeff = param(1:3);
+width_B_multiple = param(4);
+win_local = build_generalized_cosine_window(L, f_local, coeff, width_B_multiple, B);
+win = zeros(N_fft, 1);
+win(f_idx) = win_local;
+W_k = fftshift(win);
+
+S_tx_k = S_LFM_k .* (G_tx_k .* W_k);
+s_tx_time = ifft(S_tx_k, N_fft);
+S_tx_full = fft(s_tx_time, N_fft);
+S_tx_with_H = S_tx_full .* H_k;
+s_out_time = ifft(S_tx_with_H, N_fft);
+s_out = s_out_time(1:N_pulse);
+s_out = s_out / sqrt(sum(abs(s_out).^2));
+
+auto_corr = xcorr(s_out, s_out);
+auto_corr = auto_corr / max(abs(auto_corr));
+
+peak_idx = ceil(length(auto_corr)/2);
+pslr_db = compute_pslr_corrected(auto_corr, peak_idx, fs, B);
+islr_db = compute_islr_corrected(auto_corr, peak_idx, fs, B);
+mainlobe_width = compute_3db_width_corrected(auto_corr, peak_idx, fs, B);
+papr_db = compute_papr(s_out);
+
+% NEW: 在J函数中给PSLR和ISLR增加权重
+J = w_pslr * pslr_db + w_islr * islr_db ...
+    + lambda1 * max(0, mainlobe_width - mlw_ref)^2 ...
+    + lambda2 * max(0, papr_db - papr_ref)^2;
+
+metrics = struct('pslr_db', pslr_db, 'islr_db', islr_db, ...
+                 'mainlobe_width', mainlobe_width, 'papr_db', papr_db);
+end
+
+function w = build_generalized_cosine_window(L, f_local, coeff, width_B_multiple, B)
+a0 = coeff(1); a1 = coeff(2); a2 = coeff(3);
+w = zeros(L, 1);
+target_bw = min(2*B, max(0.1*B, width_B_multiple * B));  % 窗宽 = k*B，并限制在当前可用频带
+active_idx = find(abs(f_local) <= target_bw/2);
+if numel(active_idx) < 3
+    [~, sorted_idx] = sort(abs(f_local), 'ascend');
+    active_idx = sort(sorted_idx(1:min(3, L)));
+end
+
+idx0 = min(active_idx);
+idx1 = max(active_idx);
+Lw = idx1 - idx0 + 1;
+n = (0:Lw-1)';
+if Lw == 1
+    w_local = 1;
+else
+    w_local = a0 - a1*cos(2*pi*n/(Lw-1)) + a2*cos(4*pi*n/(Lw-1));
+end
+w_local(w_local < 0) = 0;
+if max(w_local) > 0
+    w_local = w_local / max(w_local);
+end
+w(idx0:idx1) = w_local;
+end
+
+function param = project_coeffs(param, min_width_B_multiple, max_width_B_multiple)
+coeff = param(1:3);
+width_B_multiple = param(4);
+
+coeff = max(0, min(1, coeff));
+s = sum(coeff);
+if s <= eps
+    coeff = [1, 0, 0];
+else
+    coeff = coeff / s;
+end
+
+width_B_multiple = max(min_width_B_multiple, min(max_width_B_multiple, width_B_multiple));
+param = [coeff, width_B_multiple];
+end
+
+
+function case_metrics = run_single_case_metrics(B_case, T_case, fs_case, alpha_reg, A_max, lambda1, lambda2, w_pslr, w_islr, min_width_B_multiple, max_width_B_multiple, fa_opt_case)
+N_pulse_case = round(T_case * fs_case);
+N_fft_case = 2^nextpow2(N_pulse_case * 8);
+freq_case = (-N_fft_case/2:N_fft_case/2-1)' * (fs_case/N_fft_case);
+
+f_center_idx_case = find(abs(freq_case) <= B_case/2);
+H_mag_case = zeros(N_fft_case, 1);
+H_mag_case(f_center_idx_case) = 0.7 + 0.4*cos(2*pi*freq_case(f_center_idx_case)/B_case*6) .* ...
+                               exp(-(freq_case(f_center_idx_case)/(0.5*B_case)).^2) + ...
+                               0.1*sin(2*pi*freq_case(f_center_idx_case)/B_case*3);
+H_phase_case = zeros(N_fft_case, 1);
+H_phase_case(f_center_idx_case) = 0.4*pi*(freq_case(f_center_idx_case)/B_case).^3 + ...
+                                  0.3*pi*sin(2*pi*freq_case(f_center_idx_case)/B_case*5) + ...
+                                  0.05*pi*(freq_case(f_center_idx_case)/B_case).^2;
+H_k_case = fftshift(H_mag_case .* exp(1j*H_phase_case));
+
+t_case = (-N_pulse_case/2:N_pulse_case/2-1)' / fs_case;
+k_chirp_case = B_case / T_case;
+s_lfm_case = exp(1j * pi * k_chirp_case * t_case.^2);
+s_lfm_padded_case = zeros(N_fft_case, 1);
+s_lfm_padded_case(1:N_pulse_case) = s_lfm_case;
+S_LFM_case = fft(s_lfm_padded_case, N_fft_case);
+
+epsilon_case = alpha_reg * mean(abs(H_k_case .* S_LFM_case));
+G_tx_case = S_LFM_case ./ (H_k_case .* S_LFM_case + epsilon_case);
+G_mag_case = abs(G_tx_case);
+if max(G_mag_case) > A_max
+    G_tx_case = G_tx_case ./ max(1, G_mag_case / A_max);
+end
+
+f_idx_case = find(abs(freq_case) <= B_case);
+f_local_case = freq_case(f_idx_case);
+L_case = length(f_idx_case);
+
+s_ideal_case = s_lfm_case / sqrt(sum(abs(s_lfm_case).^2));
+S_no_case = S_LFM_case .* H_k_case;
+s_no_time_case = ifft(S_no_case, N_fft_case);
+s_no_case = s_no_time_case(1:N_pulse_case);
+s_no_case = s_no_case / sqrt(sum(abs(s_no_case).^2));
+
+auto_corr_ideal_case = xcorr(s_ideal_case, s_ideal_case);
+auto_corr_ideal_case = auto_corr_ideal_case / max(abs(auto_corr_ideal_case));
+peak_idx_ideal_case = ceil(length(auto_corr_ideal_case)/2);
+mlw_ref_case = compute_3db_width_corrected(auto_corr_ideal_case, peak_idx_ideal_case, fs_case, B_case);
+papr_ref_case = compute_papr(s_ideal_case);
+
+best_param_case = optimize_generalized_cosine_fa( ...
+    G_tx_case, S_LFM_case, H_k_case, N_fft_case, N_pulse_case, f_idx_case, f_local_case, ...
+    mlw_ref_case, papr_ref_case, lambda1, lambda2, w_pslr, w_islr, ...
+    min_width_B_multiple, max_width_B_multiple, fa_opt_case, fs_case, B_case);
+
+coeff_case = best_param_case(1:3);
+width_case = best_param_case(4);
+win_local_case = build_generalized_cosine_window(L_case, f_local_case, coeff_case, width_case, B_case);
+win_case = zeros(N_fft_case, 1);
+win_case(f_idx_case) = win_local_case;
+W_case = fftshift(win_case);
+
+S_tx_opt_case = S_LFM_case .* (G_tx_case .* W_case);
+s_tx_opt_time_case = ifft(S_tx_opt_case, N_fft_case);
+S_opt_out_case = fft(s_tx_opt_time_case, N_fft_case) .* H_k_case;
+s_opt_out_case = ifft(S_opt_out_case, N_fft_case);
+s_opt_case = s_opt_out_case(1:N_pulse_case);
+s_opt_case = s_opt_case / sqrt(sum(abs(s_opt_case).^2));
+
+auto_corr_no_case = xcorr(s_no_case, s_no_case);
+auto_corr_no_case = auto_corr_no_case / max(abs(auto_corr_no_case));
+peak_idx_no_case = ceil(length(auto_corr_no_case)/2);
+
+auto_corr_opt_case = xcorr(s_opt_case, s_opt_case);
+auto_corr_opt_case = auto_corr_opt_case / max(abs(auto_corr_opt_case));
+peak_idx_opt_case = ceil(length(auto_corr_opt_case)/2);
+
+case_metrics = struct( ...
+    'pslr_no_comp', compute_pslr_corrected(auto_corr_no_case, peak_idx_no_case, fs_case, B_case), ...
+    'pslr_opt', compute_pslr_corrected(auto_corr_opt_case, peak_idx_opt_case, fs_case, B_case), ...
+    'islr_no_comp', compute_islr_corrected(auto_corr_no_case, peak_idx_no_case, fs_case, B_case), ...
+    'islr_opt', compute_islr_corrected(auto_corr_opt_case, peak_idx_opt_case, fs_case, B_case), ...
+    'mlw_no_comp', compute_3db_width_corrected(auto_corr_no_case, peak_idx_no_case, fs_case, B_case), ...
+    'mlw_opt', compute_3db_width_corrected(auto_corr_opt_case, peak_idx_opt_case, fs_case, B_case), ...
+    'papr_no_comp', compute_papr(s_no_case), ...
+    'papr_opt', compute_papr(s_opt_case));
+end
+
+
+
+function [af_db, tau_axis_s, fd_axis_hz] = compute_ambiguity_surface(x, fs, max_delay_samples, fd_axis_hz)
+% 计算归一化窄带模糊函数 |chi(tau,f_d)|（dB）
+x = x(:);
+N = length(x);
+lag_vec = -max_delay_samples:max_delay_samples;
+num_lag = numel(lag_vec);
+num_fd = numel(fd_axis_hz);
+af = zeros(num_fd, num_lag);
+
+n = (0:N-1)';
+for ifd = 1:num_fd
+    doppler = exp(1j * 2*pi * fd_axis_hz(ifd) * n / fs);
+    x_dopp = x .* doppler;
+    for ilag = 1:num_lag
+        tau = lag_vec(ilag);
+        if tau >= 0
+            idx1 = 1:(N-tau);
+            idx2 = (1+tau):N;
+        else
+            k = -tau;
+            idx1 = (1+k):N;
+            idx2 = 1:(N-k);
+        end
+        af(ifd, ilag) = abs(sum(x_dopp(idx1) .* conj(x(idx2))));
+    end
+end
+
+max_val = max(af(:)) + eps;
+af_db = 20*log10(af / max_val + eps);
+tau_axis_s = lag_vec / fs;
+end
+
+%% 修正后的辅助函数
+function pslr = compute_pslr_corrected(corr_signal, peak_idx, fs, B)
+    % 修正的峰值旁瓣比计算函数
+    % 基于主瓣理论宽度定义区域
+    % 主瓣宽度 ≈ 1/B，转换为采样点数
+    mainlobe_width_samples = ceil(2 * fs / B);  % 取2倍作为安全余量
+    
+    % 确保边界有效
+    mainlobe_start = max(1, peak_idx - mainlobe_width_samples);
+    mainlobe_end = min(length(corr_signal), peak_idx + mainlobe_width_samples);
+    
+    % 创建掩码排除主瓣
+    mask = true(length(corr_signal), 1);
+    mask(mainlobe_start:mainlobe_end) = false;
+    
+    % 如果没有旁瓣，返回一个较差的值
+    if sum(mask) == 0
+        pslr = -5;  % 一个较差的值
+        return;
+    end
+    
+    % 计算旁瓣峰值和主瓣峰值
+    sidelobe_peak = max(abs(corr_signal(mask)));
+    mainlobe_peak = abs(corr_signal(peak_idx));
+    
+    % 计算PSLR（dB）
+    if mainlobe_peak > 0
+        pslr = 20*log10(sidelobe_peak / mainlobe_peak);
+    else
+        pslr = -inf;
+    end
+end
+
+function islr = compute_islr_corrected(corr_signal, peak_idx, fs, B)
+    % 修正的积分旁瓣比计算函数
+    % 主瓣宽度 ≈ 1/B，转换为采样点数
+    mainlobe_width_samples = ceil(2 * fs / B);  % 取2倍作为安全余量
+    
+    % 确保边界有效
+    mainlobe_start = max(1, peak_idx - mainlobe_width_samples);
+    mainlobe_end = min(length(corr_signal), peak_idx + mainlobe_width_samples);
+    
+    % 主瓣能量
+    mainlobe_energy = sum(abs(corr_signal(mainlobe_start:mainlobe_end)).^2);
+    
+    % 总能量
+    total_energy = sum(abs(corr_signal).^2);
+    
+    % 旁瓣能量 = 总能量 - 主瓣能量
+    sidelobe_energy = total_energy - mainlobe_energy;
+    
+    % 计算ISLR（dB）
+    if mainlobe_energy > 0 && sidelobe_energy > 0
+        islr = 10*log10(sidelobe_energy / mainlobe_energy);
+    else
+        islr = -inf;
+    end
+end
+
+function bw_3db = compute_3db_width_corrected(corr_signal, peak_idx, fs, B)
+    % 修正的3dB主瓣宽度计算函数
+    corr_mag = abs(corr_signal);
+    peak_value = corr_mag(peak_idx);
+    
+    % 找到3dB点（峰值下降3dB）
+    threshold_3db = peak_value / sqrt(2);  % -3dB点
+    
+    % 向左搜索3dB点
+    left_idx = peak_idx;
+    step_count = 0;
+    max_steps = 100;  % 防止无限循环
+    
+    while left_idx > 1 && corr_mag(left_idx) >= threshold_3db && step_count < max_steps
+        left_idx = left_idx - 1;
+        step_count = step_count + 1;
+    end
+    
+    % 向右搜索3dB点
+    right_idx = peak_idx;
+    step_count = 0;
+    
+    while right_idx < length(corr_mag) && corr_mag(right_idx) >= threshold_3db && step_count < max_steps
+        right_idx = right_idx + 1;
+        step_count = step_count + 1;
+    end
+    
+    % 计算宽度（秒）
+    width_samples = right_idx - left_idx;
+    bw_3db = width_samples / fs * 1e6;  % 转换为微秒
+    
+    % 如果找不到3dB点或宽度异常，返回理论值
+    if bw_3db <= 0 || bw_3db > 100
+        bw_3db = 0.886 / B * 1e6;  % 修正后的理论公式
+    end
+    
+    % 确保宽度不会太小
+    if bw_3db < 0.01
+        bw_3db = 0.886 / B * 1e6;
+    end
+end
+
+function papr_db = compute_papr(x)
+p = abs(x).^2;
+papr_db = 10 * log10(max(p) / mean(p));
+end
